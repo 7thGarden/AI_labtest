@@ -1,43 +1,22 @@
 from fastapi import FastAPI
 
+from app.routes.health import router as health_router
+from app.routes.products import router as products_router
+
 app = FastAPI(
     title="Catalog API",
-    description="Demo Catalog API for OpenSRE",
     version="1.0.0",
+    description="Demo Catalog API for OpenSRE",
 )
+
+app.include_router(health_router, prefix="/api/v1")
+app.include_router(products_router, prefix="/api/v1")
 
 
 @app.get("/")
 def root():
     return {
-        "message": "Catalog API is running",
-        "status": "healthy",
+        "application": "Catalog API",
+        "status": "running",
+        "version": "1.0.0"
     }
-
-
-@app.get("/health")
-def health():
-    return {
-        "status": "UP",
-    }
-
-
-@app.get("/products")
-def products():
-    return [
-        {
-            "id": 1,
-            "name": "Laptop",
-            "price": 85000,
-        },
-        {
-            "id": 2,
-            "name": "Keyboard",
-            "price": 2500,
-        },
-        {
-            "id": 3,
-            "name": "Mouse",
-            "price": 1200,
-        },
-    ]
