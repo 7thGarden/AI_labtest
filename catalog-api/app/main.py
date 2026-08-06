@@ -1,24 +1,49 @@
 from fastapi import FastAPI
-
-from app.routes.health import router as health_router
-from app.routes.products import router as products_router
-from app.routes.failure import router as failure_router
+from prometheus_fastapi_instrumentator import Instrumentator
 
 app = FastAPI(
     title="Catalog API",
-    version="1.0.0",
-    description="Demo Catalog API for OpenSRE",
+    version="1.0.0"
 )
 
-app.include_router(health_router, prefix="/api/v1")
-app.include_router(products_router, prefix="/api/v1")
-app.include_router(failure_router, prefix="/api/v1")
+Instrumentator().instrument(app).expose(app)
 
 
 @app.get("/")
 def root():
     return {
-        "application": "Catalog API",
-        "status": "running",
-        "version": "1.0.0"
+        "message": "Catalog API Running"
     }
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "UP"
+    }
+
+
+@app.get("/products")
+def products():
+    return [
+        {
+            "id": 1,
+            "name": "Laptop",
+            "price": 85000,
+        },
+        {
+            "id": 2,
+            "name": "Keyboard",
+            "price": 2500,
+        },
+        {
+            "id": 3,
+            "name": "Mouse",
+            "price": 1200,
+        },
+    ]
+
+
+@app.get("/failure")
+def failure():
+    raise Exception("Demo Failure")
