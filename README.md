@@ -1,79 +1,8 @@
-# 🚀 OpenSRE Demo Platform
+# 🚀 OpenSRE Dashboard
 
-> **An AI-powered Site Reliability Engineering (SRE) Platform built using Kubernetes, OpenTelemetry, VictoriaMetrics, Grafana, and OpenSRE.**
+An AI-powered Kubernetes Observability Platform that combines **OpenSRE**, **Kubernetes**, **VictoriaMetrics**, **OpenTelemetry**, and **Grafana** into a single dashboard for monitoring, troubleshooting, and AI-assisted incident analysis.
 
-![Status](https://img.shields.io/badge/Status-In%20Development-orange)
-![Python](https://img.shields.io/badge/Python-3.14-blue)
-![FastAPI](https://img.shields.io/badge/FastAPI-Backend-009688)
-![React](https://img.shields.io/badge/React-Frontend-61DAFB)
-![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.36-blue)
-![License](https://img.shields.io/badge/License-MIT-green)
-
----
-
-## 📖 Overview
-
-Modern distributed applications generate thousands of metrics, logs, and alerts every second. During incidents, Site Reliability Engineers (SREs) spend significant time navigating dashboards, investigating infrastructure, and identifying the root cause of failures.
-
-**OpenSRE Demo Platform** is a cloud-native observability platform that demonstrates how AI can assist SREs during incident investigation.
-
-The platform combines:
-
-- Kubernetes
-- OpenTelemetry
-- VictoriaMetrics
-- Grafana
-- OpenSRE CLI
-- FastAPI
-- React
-
-into a single web application capable of monitoring workloads, visualizing metrics, and performing AI-assisted diagnostics.
-
----
-
-## 🎯 Project Objectives
-
-The primary objectives of this project are:
-
-- Build a complete cloud-native observability stack.
-- Deploy applications on Kubernetes.
-- Collect application metrics using OpenTelemetry.
-- Store metrics inside VictoriaMetrics.
-- Visualize infrastructure using Grafana.
-- Integrate OpenSRE for AI-assisted troubleshooting.
-- Build a modern web dashboard for SRE operations.
-- Demonstrate an end-to-end observability workflow.
-
----
-
-## 🏗️ High-Level Architecture
-
-```text
-                           React Dashboard
-                                  │
-                                  ▼
-                     OpenSRE Backend (FastAPI)
-                     │          │            │
-                     │          │            │
-                     ▼          ▼            ▼
-               OpenSRE CLI   kubectl   VictoriaMetrics
-                                   │
-                                   ▼
-                           Kubernetes Cluster
-                                   │
-                              Catalog API
-                                   │
-                            /metrics endpoint
-                                   │
-                                   ▼
-                               vmagent
-                                   │
-                                   ▼
-                          VictoriaMetrics
-                                   │
-                                   ▼
-                               Grafana
-```
+The project demonstrates how modern observability tools can be integrated with AI to simplify Kubernetes operations and provide a centralized monitoring experience.
 
 ---
 
@@ -82,304 +11,148 @@ The primary objectives of this project are:
 ### Infrastructure
 
 - Kubernetes Cluster (Kind)
-- Podman Container Runtime
-- Helm Package Management
-
-### Observability
-
-- OpenTelemetry Collector
-- VictoriaMetrics
-- vmagent
-- Grafana Dashboards
-
-### Backend
-
-- FastAPI REST APIs
-- Kubernetes Integration
-- OpenSRE Integration
-- Metrics API
-
-### Frontend *(In Progress)*
-
-- React Dashboard
-- Incident Dashboard
-- Cluster Health
-- AI Assistant
-- Metrics Visualization
-
----
-
-## 🛠️ Tech Stack
-
-### Programming Languages
-
-- Python 3.14
-- JavaScript
-- YAML
-- Bash
-
----
-
-### Backend
-
-- FastAPI
-- Uvicorn
-- Requests
-- Kubernetes Python Client
-
----
-
-### Frontend
-
-- React
-- Vite
-- Axios *(Planned)*
-
----
-
-### Containerization
-
-- Podman
-
----
-
-### Container Orchestration
-
-- Kubernetes (Kind)
-
----
-
-### Observability
-
+- Sample FastAPI Application
 - OpenTelemetry Collector
 - VictoriaMetrics
 - vmagent
 - Grafana
 
+### Backend
+
+- FastAPI REST APIs
+- Kubernetes Integration
+- OpenSRE CLI Integration
+- VictoriaMetrics Health Check
+- Command Execution Layer
+
+### Frontend
+
+- Dashboard
+- Kubernetes Overview
+- Metrics Page
+- AI Analysis
+- Settings Page
+
 ---
 
-### AI Layer
+# 🏗 Architecture
 
-- OpenSRE CLI
+```
+                        +----------------------+
+                        |     React Frontend   |
+                        |     (Dashboard)      |
+                        +----------+-----------+
+                                   |
+                          REST API Calls
+                                   |
+                                   v
+                     +---------------------------+
+                     |     FastAPI Backend       |
+                     |  OpenSRE API Layer        |
+                     +------------+--------------+
+                                  |
+          +-----------------------+-----------------------+
+          |                       |                       |
+          |                       |                       |
+          v                       v                       v
+
+  Kubernetes Cluster      OpenSRE CLI          VictoriaMetrics
+
+          |                                        |
+          |                                        |
+          +-------------------+--------------------+
+                              |
+                              v
+                         OpenTelemetry
+                              |
+                              v
+                           Grafana
+```
 
 ---
 
-### DevOps Tools
+# 🛠 Tech Stack
 
-- Git
-- GitHub
-- Helm
-- kubectl
-- Kind
+| Category | Technology |
+|----------|------------|
+| Frontend | React + Vite |
+| Backend | FastAPI |
+| Container Runtime | Podman |
+| Kubernetes | Kind |
+| Metrics | VictoriaMetrics |
+| Metrics Collection | vmagent |
+| Telemetry | OpenTelemetry Collector |
+| Visualization | Grafana |
+| AI | OpenSRE |
+| Language | Python 3.13 |
+| Package Manager | pip |
+| API Testing | Bruno |
+| Version Control | Git & GitHub |
 
 ---
 
-## 📂 Project Structure
+# 📂 Project Structure
 
 ```
 opensre-demo/
 │
-├── catalog-api/                 # Demo application
+├── catalog-api/
 │
-├── opensre-backend/             # FastAPI backend
+├── frontend/
 │
-├── frontend/                    # React frontend
+├── opensre-backend/
 │
 ├── infra/
-│   ├── helm/
-│   ├── k8s/
 │   ├── kind/
-│   └── scripts/
+│   └── k8s/
 │
 ├── observability/
 │   ├── otel-values.yaml
-│   ├── vmagent-values.yaml
-│   └── ...
+│   └── vmagent-values.yaml
 │
-├── docs/
-│
-├── README.md
-│
-└── .gitignore
+└── README.md
 ```
 
 ---
 
-# 📋 Prerequisites
+# ⚙️ Prerequisites
 
-The project has been tested on:
+Install the following tools before starting.
 
-- Ubuntu 26.04 LTS
-- Python 3.14
-- Podman 5.x
-- Kubernetes v1.36
-- Helm v3
-- Kind
+- Ubuntu 24.04/26.04 LTS
+- Python 3.13+
+- Node.js 24+
 - Git
+- Podman
+- Kind
+- kubectl
+- Helm
+- OpenSRE CLI
 
-Although Windows with WSL may work, this project is primarily developed and tested on Ubuntu.
-
----
-
-# 📦 Required Software
-
-Install the following tools before starting:
-
-| Tool | Purpose |
-|-------|----------|
-| Git | Version Control |
-| Python 3.14 | Backend Development |
-| Podman | Container Runtime |
-| kubectl | Kubernetes CLI |
-| Helm | Kubernetes Package Manager |
-| Kind | Local Kubernetes Cluster |
-| VS Code | Development |
-| OpenSRE CLI | AI Incident Analysis |
-
----
-
-# 🚀 Getting Started
-
-Clone the repository:
+Verify the installation:
 
 ```bash
-git clone https://github.com/Ankit-Kumar77/AI_labtest.git
-
-cd AI_labtest
-```
-
----
-
-## Install Basic Packages
-
-```bash
-sudo apt update
-
-sudo apt install -y \
-curl \
-wget \
-git \
-vim \
-nano \
-zip \
-unzip \
-jq \
-ca-certificates \
-gnupg \
-software-properties-common \
-apt-transport-https \
-build-essential
-```
-
----
-
-## Install Podman
-
-```bash
-sudo apt install -y podman
-```
-
-Verify:
-
-```bash
+python3 --version
+node -v
+npm -v
 podman --version
-
-podman info
-```
-
-Run a test container:
-
-```bash
-podman run hello-world
-```
-
----
-
-## Install kubectl
-
-```bash
-curl -LO "https://dl.k8s.io/release/$(curl -L -s \
-https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-
-chmod +x kubectl
-
-sudo mv kubectl /usr/local/bin/
-```
-
-Verify:
-
-```bash
 kubectl version --client
-```
-
----
-
-## Install Helm
-
-```bash
-curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-```
-
-Verify:
-
-```bash
-helm version
-```
-
----
-
-## Install Kind
-
-```bash
-curl -Lo ./kind \
-https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
-
-chmod +x kind
-
-sudo mv kind /usr/local/bin/
-```
-
-Verify:
-
-```bash
 kind version
-```
-
----
-
-## Install OpenSRE CLI
-
-```bash
-curl -fsSL https://install.opensre.com | bash
-
-source ~/.bashrc
-```
-
-Verify:
-
-```bash
+helm version
 opensre --version
 ```
+# 🚀 Quick Start
 
-> **Note:** OpenSRE onboarding and API key configuration can be completed later. The project can be developed without completing the onboarding wizard immediately.
-
----
-
-# 🚀 Deploying the Project
-
-Follow the steps below to deploy the complete observability stack.
-
----
-
-# 1. Create the Kubernetes Cluster
-
-Navigate to the project root.
+## 1. Clone the Repository
 
 ```bash
+git clone https://github.com/<YOUR_USERNAME>/opensre-demo.git
 cd opensre-demo
 ```
 
-Create the cluster.
+---
+
+## 2. Create the Kubernetes Cluster
 
 ```bash
 sudo kind create cluster \
@@ -387,7 +160,7 @@ sudo kind create cluster \
   --config infra/kind/kind-config.yaml
 ```
 
-Verify the cluster.
+Verify the cluster:
 
 ```bash
 kubectl get nodes
@@ -395,60 +168,35 @@ kubectl get nodes
 
 Expected output:
 
-```text
-NAME                         STATUS   ROLES           VERSION
+```
+NAME                         STATUS   ROLES
 opensre-demo-control-plane   Ready    control-plane
-opensre-demo-worker          Ready    <none>
+opensre-demo-worker          Ready
 ```
 
 ---
 
-# 2. Build the Catalog API
-
-Navigate to the application.
+## 3. Build the Sample Application
 
 ```bash
 cd catalog-api
+
+sudo podman build -t localhost/catalog-api:v1 .
 ```
 
-Create the virtual environment.
+Export the image:
 
 ```bash
-python3 -m venv .venv
-
-source .venv/bin/activate
+sudo podman save localhost/catalog-api:v1 -o catalog-api.tar
 ```
 
-Install dependencies.
+Load the image into Kind:
 
 ```bash
-pip install -r requirements.txt
+sudo kind load image-archive catalog-api.tar --name opensre-demo
 ```
 
-Build the container image.
-
-```bash
-sudo podman build \
--t localhost/catalog-api:v1 .
-```
-
-Export the image.
-
-```bash
-sudo podman save \
--o catalog-api.tar \
-localhost/catalog-api:v1
-```
-
-Load the image into Kind.
-
-```bash
-sudo kind load image-archive \
-catalog-api.tar \
---name opensre-demo
-```
-
-Delete the archive.
+Remove the archive:
 
 ```bash
 rm catalog-api.tar
@@ -456,21 +204,15 @@ rm catalog-api.tar
 
 ---
 
-# 3. Deploy the Application
-
-Return to the project root.
+## 4. Deploy the Application
 
 ```bash
 cd ..
-```
 
-Deploy the application.
-
-```bash
 kubectl apply -f infra/k8s/
 ```
 
-Verify deployment.
+Verify:
 
 ```bash
 kubectl get all -n opensre
@@ -478,125 +220,60 @@ kubectl get all -n opensre
 
 Expected:
 
-- Deployment Running
-- Service Running
-- Pod Running
+- catalog-api Deployment
+- catalog-api Pod
+- catalog-api Service
 
 ---
 
-# 4. Deploy VictoriaMetrics
+# 📊 Deploy Observability Stack
 
-Add the Helm repository.
-
-```bash
-helm repo add vm \
-https://victoriametrics.github.io/helm-charts/
-
-helm repo update
-```
-
-Create namespace.
+Create the namespace:
 
 ```bash
 kubectl create namespace observability
 ```
 
-Install VictoriaMetrics.
+## VictoriaMetrics
 
 ```bash
-helm install victoriametrics \
-vm/victoria-metrics-single \
---namespace observability
-```
-
-Verify.
-
-```bash
-kubectl get pods -n observability
+helm install victoriametrics vm/victoria-metrics-single \
+  -n observability
 ```
 
 ---
 
-# 5. Install Grafana
+## Grafana
 
 ```bash
-helm repo add grafana \
-https://grafana.github.io/helm-charts
-
-helm repo update
-```
-
-Install.
-
-```bash
-helm install grafana \
-grafana/grafana \
---namespace observability \
---set adminPassword=admin123
-```
-
-Verify.
-
-```bash
-kubectl get pods -n observability
+helm install grafana grafana/grafana \
+  -n observability \
+  --set adminPassword=admin123
 ```
 
 ---
 
-# 6. Install OpenTelemetry Collector
+## OpenTelemetry Collector
 
 ```bash
-helm repo add open-telemetry \
-https://open-telemetry.github.io/opentelemetry-helm-charts
-
-helm repo update
-```
-
-Install.
-
-```bash
-helm install otel-collector \
-open-telemetry/opentelemetry-collector \
--n observability \
---set mode=deployment \
---set image.repository=ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-k8s \
---set command.name=otelcol-k8s
-```
-
-Upgrade using the custom configuration.
-
-```bash
-helm upgrade otel-collector \
-open-telemetry/opentelemetry-collector \
--n observability \
--f observability/otel-values.yaml
+helm install otel-collector open-telemetry/opentelemetry-collector \
+  -n observability \
+  -f observability/otel-values.yaml
 ```
 
 ---
 
-# 7. Install vmagent
-
-Install vmagent.
+## vmagent
 
 ```bash
-helm install vmagent \
-vm/victoria-metrics-agent \
--n observability \
---set remoteWrite[0].url=http://victoriametrics-victoria-metrics-single-server.observability.svc.cluster.local:8428/api/v1/write
-```
-
-Upgrade with the scrape configuration.
-
-```bash
-helm upgrade vmagent \
-vm/victoria-metrics-agent \
--n observability \
--f observability/vmagent-values.yaml
+helm install vmagent vm/victoria-metrics-agent \
+  -n observability \
+  -f observability/vmagent-values.yaml
 ```
 
 ---
 
-# 8. Verify the Stack
+Verify all services:
 
 ```bash
 kubectl get pods -n observability
@@ -604,56 +281,68 @@ kubectl get pods -n observability
 
 Expected:
 
-```text
-grafana                              Running
-
-otel-collector                       Running
-
-victoriametrics                      Running
-
-vmagent                              Running
 ```
+grafana
+victoriametrics
+otel-collector
+vmagent
+```
+
+All pods should be in the **Running** state.
 
 ---
 
-# 9. Start the Catalog API
+# 🔍 Verify Kubernetes
+
+Check all namespaces:
 
 ```bash
-cd catalog-api
-
-source .venv/bin/activate
-
-uvicorn app.main:app \
---reload
+kubectl get pods -A
 ```
 
-Open:
+Check application:
 
-```
-http://localhost:8000/docs
-```
-
-Metrics endpoint:
-
-```
-http://localhost:8000/metrics
+```bash
+kubectl get pods -n opensre
 ```
 
----
+Check observability stack:
 
-# 10. Start the Backend
+```bash
+kubectl get pods -n observability
+```
+
+At this point, the Kubernetes cluster, sample application, and observability stack should all be running successfully.
+
+# ▶️ Running the Project
+
+## Start the Backend
+
+Navigate to the backend directory:
 
 ```bash
 cd opensre-backend
-
-source .venv/bin/activate
-
-uvicorn app.main:app \
---reload \
---port 8001
 ```
 
-Open:
+Activate the virtual environment:
+
+```bash
+source .venv/bin/activate
+```
+
+Start the FastAPI server:
+
+```bash
+uvicorn app.main:app --reload --port 8001
+```
+
+Backend API:
+
+```
+http://localhost:8001
+```
+
+Swagger Documentation:
 
 ```
 http://localhost:8001/docs
@@ -661,168 +350,200 @@ http://localhost:8001/docs
 
 ---
 
-# Current API Endpoints
+## Start the Frontend
 
-## Catalog API
+Navigate to the frontend directory:
+
+```bash
+cd frontend
+```
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Start the development server:
+
+```bash
+npm run dev
+```
+
+Frontend URL:
 
 ```
-GET /
-GET /health
-GET /products
-GET /metrics
+http://localhost:5173
 ```
 
 ---
 
-## OpenSRE Backend
+# 📡 Available API Endpoints
+
+## Health
 
 ```
 GET /api/health
+```
 
+Checks whether the backend service is running.
+
+---
+
+## Kubernetes
+
+```
 GET /api/kubernetes/nodes
+```
 
+Returns all Kubernetes nodes.
+
+```
 GET /api/kubernetes/pods
+```
 
+Returns all running pods.
+
+```
 GET /api/kubernetes/services
+```
 
+Returns all Kubernetes services.
+
+```
+GET /api/kubernetes/deployments
+```
+
+Returns all deployments.
+
+---
+
+## Metrics
+
+```
 GET /api/metrics/health
+```
 
+Checks VictoriaMetrics connectivity.
+
+---
+
+## OpenSRE
+
+```
 GET /api/opensre/version
+```
 
+Returns the installed OpenSRE version.
+
+```
 GET /api/opensre/doctor
 ```
 
+Runs `opensre doctor` and returns the diagnostic output.
+
 ---
 
-# Current Project Status
+# 🖥 Dashboard Overview
 
-| Component | Status |
-|------------|--------|
-| Ubuntu Setup | ✅ |
-| GitHub Repository | ✅ |
-| Podman | ✅ |
-| Kind Cluster | ✅ |
-| Catalog API | ✅ |
-| Kubernetes Deployment | ✅ |
-| OpenTelemetry Collector | ✅ |
-| VictoriaMetrics | ✅ |
-| vmagent | ✅ |
-| Grafana | ✅ |
-| FastAPI Backend | ✅ |
-| React Frontend | 🚧 |
-| OpenSRE Integration | 🚧 |
-| AI Incident Analysis | 🚧 |
-| Dashboard UI | 🚧 |
+The React dashboard consists of five pages:
 
-# ⚙️ Environment Variables
+### 📊 Dashboard
 
-Create a `.env` file inside the **opensre-backend** directory.
+- Cluster overview
+- Node count
+- Pod count
+- Service count
+- Deployment count
+- Cluster health summary
 
-```env
-# OpenSRE CLI
+---
 
-OPENSRE_BINARY=opensre
+### ☸ Kubernetes
 
-# Kubernetes
+- Node information
+- Pod information
+- Cluster resource overview
 
-KUBECONFIG=~/.kube/config
+---
 
-# VictoriaMetrics
+### 📈 Metrics
 
-VICTORIA_METRICS_URL=http://localhost:8428
+- VictoriaMetrics health status
+- Grafana integration
 
-# Grafana
+---
 
-GRAFANA_URL=http://localhost:3000
+### 🤖 AI Analysis
 
-# OpenAI (Optional)
+- OpenSRE Version
+- OpenSRE Doctor Output
+- Backend integration status
 
-OPENAI_API_KEY=YOUR_OPENAI_API_KEY
+---
+
+### ⚙ Settings
+
+- Backend status
+- Kubernetes status
+- VictoriaMetrics status
+- OpenSRE status
+- Quick links to Grafana and Swagger
+
+---
+
+# ✅ Verification
+
+Verify that everything is running correctly.
+
+Backend:
+
+```bash
+curl http://localhost:8001/api/health
 ```
 
-> **Note:** The project can be developed without configuring the API key. The key is only required for AI-assisted incident analysis through OpenSRE.
+Frontend:
 
----
+Open:
 
-# 📊 Monitoring Stack
+```
+http://localhost:5173
+```
 
-The observability stack consists of the following components:
+Grafana:
 
-| Component | Purpose |
-|------------|---------|
-| Catalog API | Demo Application |
-| OpenTelemetry Collector | Telemetry Collection |
-| vmagent | Metrics Scraping |
-| VictoriaMetrics | Time Series Database |
-| Grafana | Visualization |
-| OpenSRE | AI Incident Analysis |
+```
+http://localhost:3000
+```
 
----
+OpenSRE:
 
-# 📌 Roadmap
+```bash
+opensre --version
+```
 
-## Phase 1 — Infrastructure ✅
+Kubernetes:
 
-- [x] Ubuntu Development Environment
-- [x] Git & GitHub
-- [x] Podman Installation
-- [x] Kubernetes Cluster (Kind)
-- [x] Catalog API
-- [x] Kubernetes Deployment
+```bash
+kubectl get nodes
+kubectl get pods -A
+```
 
----
+If all commands execute successfully and all pods are in the **Running** state, the platform has been deployed successfully.
 
-## Phase 2 — Observability ✅
+# 🔧 Troubleshooting
 
-- [x] OpenTelemetry Collector
-- [x] VictoriaMetrics
-- [x] vmagent
-- [x] Grafana
-- [x] Metrics Collection
+## 1. Kubernetes Cluster Not Reachable
 
----
-
-## Phase 3 — Backend 🚧
-
-- [x] FastAPI Setup
-- [x] Kubernetes APIs
-- [x] Metrics APIs
-- [ ] OpenSRE Service Layer
-- [ ] Incident APIs
-- [ ] AI Analysis APIs
-
----
-
-## Phase 4 — Frontend 🚧
-
-- [ ] React Dashboard
-- [ ] Cluster Overview
-- [ ] Metrics Dashboard
-- [ ] Incident Dashboard
-- [ ] AI Assistant
-
----
-
-## Phase 5 — AI Integration 🚧
-
-- [ ] OpenSRE Onboarding
-- [ ] LLM Integration
-- [ ] Root Cause Analysis
-- [ ] AI Recommendations
-
----
-
-# 🛠️ Troubleshooting
-
-## Kind Cluster Not Reachable
-
-If `kubectl` shows:
+**Error**
 
 ```text
-The connection to the server localhost:8080 was refused
+The connection to the server 127.0.0.1:<PORT> was refused
 ```
 
-Copy the kubeconfig:
+### Solution
+
+If the Kind cluster was recreated using `sudo`, refresh your kubeconfig:
 
 ```bash
 mkdir -p ~/.kube
@@ -834,137 +555,173 @@ sudo chown $USER:$USER ~/.kube/config
 chmod 600 ~/.kube/config
 ```
 
----
-
-## Rootless Podman Issues
-
-If Kind cannot create the cluster with rootless Podman:
-
-```text
-Delegate=yes
-```
-
-Use root Podman for Kind:
+Verify:
 
 ```bash
-sudo kind create cluster \
---name opensre-demo \
---config infra/kind/kind-config.yaml
+kubectl get nodes
 ```
 
 ---
 
-## Catalog Image Not Found
+## 2. catalog-api Pod Stuck in `ErrImageNeverPull`
 
-If Kind reports:
-
-```text
-image not known
-```
+This happens because the Docker/Podman image hasn't been loaded into the Kind cluster.
 
 Rebuild the image:
 
 ```bash
-sudo podman build \
--t localhost/catalog-api:v1 .
+cd catalog-api
+
+sudo podman build -t localhost/catalog-api:v1 .
 ```
 
-Export:
+Export the image:
 
 ```bash
-sudo podman save \
--o catalog-api.tar \
-localhost/catalog-api:v1
+sudo podman save localhost/catalog-api:v1 -o catalog-api.tar
 ```
 
-Load:
+Load it into Kind:
 
 ```bash
-sudo kind load image-archive \
-catalog-api.tar \
---name opensre-demo
+sudo kind load image-archive catalog-api.tar --name opensre-demo
 ```
 
----
-
-## OpenTelemetry Collector CrashLoopBackOff
-
-If the Collector enters `CrashLoopBackOff`, verify the configuration:
+Restart the deployment:
 
 ```bash
-kubectl logs \
--n observability \
-deployment/otel-collector-opentelemetry-collector
+kubectl rollout restart deployment/catalog-api -n opensre
 ```
 
-Then update the Helm release:
+---
+
+## 3. OpenTelemetry Collector CrashLoopBackOff
+
+If the collector fails to start, verify the configuration file:
 
 ```bash
-helm upgrade otel-collector \
-open-telemetry/opentelemetry-collector \
--n observability \
--f observability/otel-values.yaml
+observability/otel-values.yaml
 ```
 
----
-
-## vmagent Installation Error
-
-If Helm reports:
-
-```text
-Please define at least one remoteWrite
-```
-
-Install using:
+Apply the updated configuration:
 
 ```bash
-helm install vmagent \
-vm/victoria-metrics-agent \
--n observability \
---set remoteWrite[0].url=http://victoriametrics-victoria-metrics-single-server.observability.svc.cluster.local:8428/api/v1/write
+helm upgrade otel-collector open-telemetry/opentelemetry-collector \
+  -n observability \
+  -f observability/otel-values.yaml
 ```
 
 ---
 
-# 🤝 Contributing
+## 4. vmagent Installation Failed
 
-Contributions are welcome.
+Verify the configuration file exists:
 
-1. Fork the repository.
-2. Create a feature branch.
-3. Commit your changes.
-4. Push the branch.
-5. Open a Pull Request.
+```bash
+ls observability/
+```
 
----
+Expected:
 
-# 📜 License
+```
+otel-values.yaml
+vmagent-values.yaml
+```
 
-This project is licensed under the **MIT License**.
+Install vmagent again:
 
----
-
-# 👨‍💻 Author
-
-**Ankit Kumar**
-
-- GitHub: https://github.com/Ankit-Kumar77
-- LinkedIn: *(Add your LinkedIn profile here)*
+```bash
+helm install vmagent vm/victoria-metrics-agent \
+  -n observability \
+  -f observability/vmagent-values.yaml
+```
 
 ---
 
-# ⭐ Support
+## 5. Frontend Cannot Connect to Backend
 
-If you found this project useful:
+Verify the backend is running:
 
-- ⭐ Star the repository
-- 🍴 Fork the project
-- 🐛 Report issues
-- 💡 Suggest improvements
+```bash
+curl http://localhost:8001/api/health
+```
 
-Your support helps improve the project and encourages further development.
+If not, restart it:
+
+```bash
+cd opensre-backend
+
+source .venv/bin/activate
+
+uvicorn app.main:app --reload --port 8001
+```
 
 ---
 
-> **OpenSRE Demo Platform** is being developed as a demonstration of modern cloud-native observability, Kubernetes monitoring, and AI-assisted Site Reliability Engineering using OpenSRE.
+## 6. React Dashboard Shows No Data
+
+Verify Kubernetes:
+
+```bash
+kubectl get nodes
+
+kubectl get pods -A
+```
+
+Verify Backend:
+
+```
+http://localhost:8001/docs
+```
+
+Verify Frontend:
+
+```
+http://localhost:5173
+```
+
+---
+
+# 📸 Screenshots
+
+Screenshots of the application will be added after the dashboard UI is finalized.
+
+- Dashboard
+- Kubernetes
+- Metrics
+- AI Analysis
+- Settings
+
+---
+
+# 🚀 Future Improvements
+
+- AI-powered incident investigation
+- One-click root cause analysis
+- AlertManager integration
+- Log aggregation with Loki
+- Historical incident timeline
+- Dashboard charts and graphs
+- Authentication & RBAC
+- Production deployment on AWS
+
+---
+
+# ✅ Current Status
+
+- ✔ Kubernetes Cluster
+- ✔ FastAPI Sample Application
+- ✔ React Dashboard
+- ✔ OpenSRE Backend
+- ✔ VictoriaMetrics
+- ✔ vmagent
+- ✔ OpenTelemetry Collector
+- ✔ Grafana
+- ✔ Kubernetes REST APIs
+- ✔ OpenSRE CLI Integration
+
+---
+
+## ⭐ Notes
+
+This project is intended as a local development and learning environment for exploring Kubernetes observability and AI-assisted operations using OpenSRE. It provides a reproducible setup for experimenting with monitoring, telemetry collection, and dashboard development before deploying to a production environment.
