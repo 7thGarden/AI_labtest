@@ -5,6 +5,7 @@ from app.routes.health import router as health_router
 from app.routes.kubernetes import router as kubernetes_router
 from app.routes.metrics import router as metrics_router
 from app.routes.opensre import router as opensre_router
+from app.routes.investigation import router as investigation_router
 
 app = FastAPI(
     title="OpenSRE Backend",
@@ -24,6 +25,7 @@ app.include_router(health_router)
 app.include_router(kubernetes_router)
 app.include_router(metrics_router)
 app.include_router(opensre_router)
+app.include_router(investigation_router)
 
 
 @app.get("/")
