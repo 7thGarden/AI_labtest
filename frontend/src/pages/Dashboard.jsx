@@ -13,7 +13,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function fetchData() {
+    async function load() {
       try {
         const [nodes, pods, services, deployments] = await Promise.all([
           api.get("/kubernetes/nodes"),
@@ -38,33 +38,60 @@ export default function Dashboard() {
       setLoading(false);
     }
 
-    fetchData();
+    load();
   }, []);
 
-  if (loading) {
-    return <h2>Loading Dashboard...</h2>;
-  }
+  if (loading) return <h2>Loading Dashboard...</h2>;
 
   return (
     <>
       <h1>Dashboard</h1>
 
       <div className="cards">
-        <Card title="Nodes" value={stats.nodes} />
-        <Card title="Pods" value={stats.pods} />
-        <Card title="Services" value={stats.services} />
-        <Card title="Deployments" value={stats.deployments} />
+        <Card title="Nodes" value={stats.nodes} color="#16a34a" />
+        <Card title="Pods" value={stats.pods} color="#2563eb" />
+        <Card title="Services" value={stats.services} color="#ea580c" />
+        <Card title="Deployments" value={stats.deployments} color="#9333ea" />
       </div>
 
       <div className="table">
-        <h2>System Status</h2>
+        <h2>Cluster Health</h2>
 
         <br />
 
-        <p>✅ Kubernetes Connected</p>
-        <p>✅ OpenSRE Backend Running</p>
-        <p>✅ VictoriaMetrics Running</p>
-        <p>✅ Grafana Running</p>
+        <table>
+          <tbody>
+            <tr>
+              <td>Kubernetes</td>
+              <td>🟢 Running</td>
+            </tr>
+
+            <tr>
+              <td>Catalog API</td>
+              <td>🟢 Running</td>
+            </tr>
+
+            <tr>
+              <td>VictoriaMetrics</td>
+              <td>🟢 Running</td>
+            </tr>
+
+            <tr>
+              <td>Grafana</td>
+              <td>🟢 Running</td>
+            </tr>
+
+            <tr>
+              <td>OpenTelemetry Collector</td>
+              <td>🟢 Running</td>
+            </tr>
+
+            <tr>
+              <td>vmagent</td>
+              <td>🟢 Running</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </>
   );
