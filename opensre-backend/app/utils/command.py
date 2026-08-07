@@ -1,16 +1,25 @@
 import subprocess
 
 
-def run(command):
+def run_command(command: list[str]) -> dict:
+    try:
+        process = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
 
-    process = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-    )
+        return {
+            "success": process.returncode == 0,
+            "returncode": process.returncode,
+            "stdout": process.stdout.strip(),
+            "stderr": process.stderr.strip(),
+        }
 
-    return {
-        "returncode": process.returncode,
-        "stdout": process.stdout,
-        "stderr": process.stderr,
-    }
+    except Exception as e:
+        return {
+            "success": False,
+            "stdout": "",
+            "stderr": str(e),
+        }

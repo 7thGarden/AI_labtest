@@ -1,25 +1,14 @@
 import os
-
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
 class Settings:
-
     PROJECT_NAME = "OpenSRE Backend"
-
     VERSION = "1.0.0"
 
-    OPENSRE_BINARY = os.getenv(
-        "OPENSRE_BINARY",
-        "opensre",
-    )
-
-    KUBECONFIG = os.getenv(
-        "KUBECONFIG",
-        os.path.expanduser("~/.kube/config"),
-    )
+    OPENSRE_BINARY = os.getenv("OPENSRE_BINARY", "opensre")
 
     VICTORIA_METRICS_URL = os.getenv(
         "VICTORIA_METRICS_URL",

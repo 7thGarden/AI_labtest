@@ -1,10 +1,18 @@
 from app.core.config import settings
-from app.utils.command import run
+from app.utils.command import run_command
+
+
+def version():
+    return run_command(
+        [
+            settings.OPENSRE_BINARY,
+            "--version",
+        ]
+    )
 
 
 def doctor():
-
-    return run(
+    return run_command(
         [
             settings.OPENSRE_BINARY,
             "doctor",
@@ -13,8 +21,7 @@ def doctor():
 
 
 def status():
-
-    return run(
+    return run_command(
         [
             settings.OPENSRE_BINARY,
             "status",
@@ -22,11 +29,10 @@ def status():
     )
 
 
-def version():
-
-    return run(
+def onboard():
+    return run_command(
         [
             settings.OPENSRE_BINARY,
-            "--version",
+            "onboard",
         ]
     )

@@ -1,16 +1,35 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-from app.routes import health
-from app.routes import kubernetes
-from app.routes import opensre
-from app.routes import metrics
+from app.routes.health import router as health_router
+from app.routes.kubernetes import router as kubernetes_router
+from app.routes.metrics import router as metrics_router
+from app.routes.opensre import router as opensre_router
 
 app = FastAPI(
     title="OpenSRE Backend",
-    version="1.0.0"
+    description="Backend API for the OpenSRE Demo Platform",
+    version="1.0.0",
 )
 
-app.include_router(health.router)
-app.include_router(kubernetes.router)
-app.include_router(opensre.router)
-app.include_router(metrics.router)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(health_router)
+app.include_router(kubernetes_router)
+app.include_router(metrics_router)
+app.include_router(opensre_router)
+
+
+@app.get("/")
+def root():
+    return {
+        "application": "OpenSRE Backend",
+        "status": "running",
+        "version": "1.0.0",
+    }

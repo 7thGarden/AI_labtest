@@ -4,6 +4,7 @@ from app.services import kubectl
 
 router = APIRouter(
     prefix="/api/kubernetes",
+    tags=["Kubernetes"],
 )
 
 
@@ -20,3 +21,8 @@ def pods():
 @router.get("/services")
 def services():
     return kubectl.get_services()
+
+
+@router.get("/deployments")
+def deployments():
+    return kubectl.get_deployments()

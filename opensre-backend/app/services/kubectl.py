@@ -1,9 +1,8 @@
-from app.utils.command import run
+from app.utils.command import run_command
 
 
 def get_nodes():
-
-    return run(
+    return run_command(
         [
             "kubectl",
             "get",
@@ -15,8 +14,7 @@ def get_nodes():
 
 
 def get_pods():
-
-    return run(
+    return run_command(
         [
             "kubectl",
             "get",
@@ -27,12 +25,22 @@ def get_pods():
 
 
 def get_services():
-
-    return run(
+    return run_command(
         [
             "kubectl",
             "get",
             "svc",
+            "-A",
+        ]
+    )
+
+
+def get_deployments():
+    return run_command(
+        [
+            "kubectl",
+            "get",
+            "deployments",
             "-A",
         ]
     )
