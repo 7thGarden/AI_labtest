@@ -1,12 +1,19 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
+
 from app.services import investigation
 from app.services import opensre_cli
-from app.services import kubectl
 
 
 class InvestigationRequest(BaseModel):
     alert_payload: str
+
+
+class ChatRequest(BaseModel):
+    message: str
+    cluster: str | None = None
+    namespace: str | None = None
+    pod: str | None = None
 
 
 router = APIRouter(
@@ -37,18 +44,18 @@ def investigate(request: InvestigationRequest):
 
 @router.get("/investigate/pod/{namespace}/{pod_name}")
 def investigate_pod(namespace: str, pod_name: str):
-    evidence_result = investigation.collect_pod_evidence(
-        namespace,
-        pod_name,
-    )
+    return investigation.investigate_pod(namespace, pod_name)
 
-    if not evidence_result.get("success"):
-        return evidence_result
-
-    return opensre_cli.investigate(
-        evidence_result["evidence"]
-    )
 
 @router.post("/chat")
-def chat(request: InvestigationRequest):
-    return opensre_cli.chat(request.alert_payload)
+def chat(request: ChatRequest):
+    prompt = {
+        "message": request.message,
+        "context": {
+            "cluster": request.cluster,
+            "namespace": request.namespace,
+            "pod": request.pod,
+        },
+    }
+
+    return opensre_cli.chat(prompt)

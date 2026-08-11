@@ -1,24 +1,74 @@
-import json
+from app.services import kubectl
+from app.services import victoriametrics
 
-from app.services import opensre_cli
 
-
-def investigate_pod(namespace: str, pod_name: str):
-    alert = {
-        "alertname": "KubernetesPodInvestigation",
-        "status": "firing",
-        "severity": "critical",
-        "labels": {
+def collect_pod_evidence(namespace: str, pod_name: str):
+    evidence = {
+        "pod": {
             "namespace": namespace,
-            "pod": pod_name,
+            "name": pod_name,
         },
-        "annotations": {
-            "summary": f"Investigate Kubernetes pod {pod_name}",
-            "description": (
-                f"Investigate the health and root cause of pod "
-                f"{pod_name} in namespace {namespace}."
-            ),
-        },
+        "kubernetes": {},
+        "metrics": {},
     }
 
-    return opensre_cli.investigate(alert)
+    # Kubernetes pod details
+    pod_result = kubectl.get_pod_details(namespace, pod_name)
+
+    if pod_result.get("success"):
+        evidence["kubernetes"]["pod_details"] = pod_result.get(
+            "stdout", ""
+        )
+    else:
+        evidence["kubernetes"]["pod_details_error"] = pod_result.get(
+            "stderr",
+            "Unable to collect pod details",
+        )
+
+    # Pod endpoint
+    endpoint_result = kubectl.get_pod_endpoint(
+        namespace,
+        pod_name,
+    )
+
+    endpoint = None
+
+    if endpoint_result.get("success"):
+        endpoint = endpoint_result.get("stdout", "").strip()
+        evidence["kubernetes"]["endpoint"] = endpoint
+    else:
+        evidence["kubernetes"]["endpoint_error"] = endpoint_result.get(
+            "stderr",
+            "Unable to determine pod endpoint",
+        )
+
+    # VictoriaMetrics evidence
+    if endpoint:
+        up_result = victoriametrics.query(
+            f'up{{instance="{endpoint}"}}'
+        )
+
+        evidence["metrics"]["up"] = up_result
+
+        memory_result = victoriametrics.query(
+            f'process_resident_memory_bytes{{instance="{endpoint}"}}'
+        )
+
+        evidence["metrics"]["memory"] = memory_result
+
+        cpu_result = victoriametrics.query(
+            f'process_cpu_seconds_total{{instance="{endpoint}"}}'
+        )
+
+        evidence["metrics"]["cpu"] = cpu_result
+
+        requests_result = victoriametrics.query(
+            f'http_requests_total{{instance="{endpoint}"}}'
+        )
+
+        evidence["metrics"]["requests"] = requests_result
+
+    return {
+        "success": True,
+        "evidence": evidence,
+    }

@@ -8,6 +8,11 @@ router = APIRouter(
 )
 
 
+@router.get("/clusters")
+def clusters():
+    return kubectl.get_clusters()
+
+
 @router.get("/nodes")
 def nodes():
     return kubectl.get_nodes()

@@ -70,3 +70,14 @@ def get_pod_endpoint(namespace: str, pod_name: str):
             "jsonpath={.status.podIP}:{.spec.containers[0].ports[0].containerPort}",
         ]
     )
+
+def get_clusters():
+    return run_command(
+        [
+            "kubectl",
+            "config",
+            "get-contexts",
+            "-o",
+            "name",
+        ]
+    )
