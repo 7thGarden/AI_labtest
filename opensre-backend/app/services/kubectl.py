@@ -1,76 +1,6 @@
 from app.utils.command import run_command
 
 
-def get_nodes():
-    return run_command(
-        [
-            "kubectl",
-            "get",
-            "nodes",
-            "-o",
-            "wide",
-        ]
-    )
-
-
-def get_pods():
-    return run_command(
-        [
-            "kubectl",
-            "get",
-            "pods",
-            "-A",
-        ]
-    )
-
-
-def get_services():
-    return run_command(
-        [
-            "kubectl",
-            "get",
-            "svc",
-            "-A",
-        ]
-    )
-
-
-def get_deployments():
-    return run_command(
-        [
-            "kubectl",
-            "get",
-            "deployments",
-            "-A",
-        ]
-    )
-
-def get_pod_details(namespace: str, pod_name: str):
-    return run_command(
-        [
-            "kubectl",
-            "describe",
-            "pod",
-            pod_name,
-            "-n",
-            namespace,
-        ]
-    )
-
-def get_pod_endpoint(namespace: str, pod_name: str):
-    return run_command(
-        [
-            "kubectl",
-            "get",
-            "pod",
-            pod_name,
-            "-n",
-            namespace,
-            "-o",
-            "jsonpath={.status.podIP}:{.spec.containers[0].ports[0].containerPort}",
-        ]
-    )
-
 def get_clusters():
     return run_command(
         [
@@ -81,3 +11,132 @@ def get_clusters():
             "name",
         ]
     )
+
+
+def get_nodes(context: str | None = None):
+    command = [
+        "kubectl",
+    ]
+
+    if context:
+        command.extend(["--context", context])
+
+    command.extend(
+        [
+            "get",
+            "nodes",
+            "-o",
+            "wide",
+        ]
+    )
+
+    return run_command(command)
+
+
+def get_pods(context: str | None = None):
+    command = [
+        "kubectl",
+    ]
+
+    if context:
+        command.extend(["--context", context])
+
+    command.extend(
+        [
+            "get",
+            "pods",
+            "-A",
+        ]
+    )
+
+    return run_command(command)
+
+
+def get_services(context: str | None = None):
+    command = [
+        "kubectl",
+    ]
+
+    if context:
+        command.extend(["--context", context])
+
+    command.extend(
+        [
+            "get",
+            "svc",
+            "-A",
+        ]
+    )
+
+    return run_command(command)
+
+
+def get_deployments(context: str | None = None):
+    command = [
+        "kubectl",
+    ]
+
+    if context:
+        command.extend(["--context", context])
+
+    command.extend(
+        [
+            "get",
+            "deployments",
+            "-A",
+        ]
+    )
+
+    return run_command(command)
+
+
+def get_pod_details(
+    namespace: str,
+    pod_name: str,
+    context: str | None = None,
+):
+    command = [
+        "kubectl",
+    ]
+
+    if context:
+        command.extend(["--context", context])
+
+    command.extend(
+        [
+            "describe",
+            "pod",
+            pod_name,
+            "-n",
+            namespace,
+        ]
+    )
+
+    return run_command(command)
+
+
+def get_pod_endpoint(
+    namespace: str,
+    pod_name: str,
+    context: str | None = None,
+):
+    command = [
+        "kubectl",
+    ]
+
+    if context:
+        command.extend(["--context", context])
+
+    command.extend(
+        [
+            "get",
+            "pod",
+            pod_name,
+            "-n",
+            namespace,
+            "-o",
+            "jsonpath={.status.podIP}:{.spec.containers[0].ports[0].containerPort}",
+        ]
+    )
+
+    return run_command(command)

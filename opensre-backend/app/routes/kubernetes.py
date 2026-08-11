@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.services import kubectl
 
@@ -14,20 +14,20 @@ def clusters():
 
 
 @router.get("/nodes")
-def nodes():
-    return kubectl.get_nodes()
+def nodes(context: str | None = Query(default=None)):
+    return kubectl.get_nodes(context)
 
 
 @router.get("/pods")
-def pods():
-    return kubectl.get_pods()
+def pods(context: str | None = Query(default=None)):
+    return kubectl.get_pods(context)
 
 
 @router.get("/services")
-def services():
-    return kubectl.get_services()
+def services(context: str | None = Query(default=None)):
+    return kubectl.get_services(context)
 
 
 @router.get("/deployments")
-def deployments():
-    return kubectl.get_deployments()
+def deployments(context: str | None = Query(default=None)):
+    return kubectl.get_deployments(context)

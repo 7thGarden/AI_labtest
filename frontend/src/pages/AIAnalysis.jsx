@@ -19,8 +19,10 @@ export default function AIAnalysis() {
   const [chat, setChat] = useState([]);
   const [chatLoading, setChatLoading] = useState(false);
 
+  const [podsLoading, setPodsLoading] = useState(false);
+
   useEffect(() => {
-    async function load() {
+    async function loadInitialData() {
       try {
         const versionRes = await api.get("/opensre/version");
         setVersion(versionRes.data.stdout);
@@ -30,7 +32,7 @@ export default function AIAnalysis() {
 
         const clusterRes = await api.get("/kubernetes/clusters");
 
-        const clusterLines = clusterRes.data.stdout
+        const clusterLines = (clusterRes.data.stdout || "")
           .split("\n")
           .map((line) => line.trim())
           .filter(Boolean);
@@ -40,10 +42,34 @@ export default function AIAnalysis() {
         if (clusterLines.length > 0) {
           setCluster(clusterLines[0]);
         }
+      } catch (err) {
+        console.error(err);
+        setDoctor("Unable to connect to OpenSRE Backend.");
+      }
+    }
 
-        const podRes = await api.get("/kubernetes/pods");
+    loadInitialData();
+  }, []);
 
-        const podLines = podRes.data.stdout
+  useEffect(() => {
+    if (!cluster) {
+      setPods([]);
+      setNamespace("");
+      setPodName("");
+      return;
+    }
+
+    async function loadPods() {
+      setPodsLoading(true);
+
+      try {
+        const response = await api.get("/kubernetes/pods", {
+          params: {
+            context: cluster,
+          },
+        });
+
+        const podLines = (response.data.stdout || "")
           .split("\n")
           .slice(1)
           .filter(Boolean);
@@ -64,15 +90,24 @@ export default function AIAnalysis() {
         if (podData.length > 0) {
           setNamespace(podData[0].namespace);
           setPodName(podData[0].name);
+        } else {
+          setNamespace("");
+          setPodName("");
         }
+
+        setInvestigation(null);
       } catch (err) {
-        console.error(err);
-        setDoctor("Unable to connect to OpenSRE Backend.");
+        console.error("Failed to load pods:", err);
+        setPods([]);
+        setNamespace("");
+        setPodName("");
+      } finally {
+        setPodsLoading(false);
       }
     }
 
-    load();
-  }, []);
+    loadPods();
+  }, [cluster]);
 
   async function investigatePod() {
     if (!namespace || !podName) {
@@ -84,7 +119,12 @@ export default function AIAnalysis() {
 
     try {
       const response = await api.get(
-        `/opensre/investigate/pod/${namespace}/${podName}`
+        `/opensre/investigate/pod/${namespace}/${podName}`,
+        {
+          params: {
+            context: cluster,
+          },
+        }
       );
 
       setInvestigation(response.data);
@@ -218,6 +258,7 @@ export default function AIAnalysis() {
           <select
             value={cluster}
             onChange={(e) => setCluster(e.target.value)}
+            disabled={clusters.length === 0}
           >
             {clusters.map((item) => (
               <option key={item} value={item}>
@@ -247,6 +288,7 @@ export default function AIAnalysis() {
 
               setPodName(firstPod ? firstPod.name : "");
             }}
+            disabled={podsLoading || namespaces.length === 0}
           >
             {namespaces.map((ns) => (
               <option key={ns} value={ns}>
@@ -266,6 +308,7 @@ export default function AIAnalysis() {
           <select
             value={podName}
             onChange={(e) => setPodName(e.target.value)}
+            disabled={podsLoading || selectedNamespacePods.length === 0}
           >
             {selectedNamespacePods.map((pod) => (
               <option key={pod.name} value={pod.name}>
@@ -275,10 +318,21 @@ export default function AIAnalysis() {
           </select>
         </label>
 
+        {podsLoading && (
+          <>
+            <br />
+            <br />
+            <span>Loading pods from selected cluster...</span>
+          </>
+        )}
+
         <br />
         <br />
 
-        <button onClick={investigatePod} disabled={loading}>
+        <button
+          onClick={investigatePod}
+          disabled={loading || podsLoading || !namespace || !podName}
+        >
           {loading ? "Investigating..." : "Investigate Pod"}
         </button>
       </div>
@@ -297,11 +351,11 @@ export default function AIAnalysis() {
           </p>
 
           <p>
-            <strong>Pod:</strong> {podName}
+            <strong>Namespace:</strong> {namespace}
           </p>
 
           <p>
-            <strong>Namespace:</strong> {namespace}
+            <strong>Pod:</strong> {podName}
           </p>
 
           <br />

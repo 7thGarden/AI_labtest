@@ -2,22 +2,32 @@ from app.services import kubectl
 from app.services import victoriametrics
 
 
-def collect_pod_evidence(namespace: str, pod_name: str):
+def collect_pod_evidence(
+    namespace: str,
+    pod_name: str,
+    context: str | None = None,
+):
     evidence = {
         "pod": {
             "namespace": namespace,
             "name": pod_name,
         },
+        "cluster": context,
         "kubernetes": {},
         "metrics": {},
     }
 
     # Kubernetes pod details
-    pod_result = kubectl.get_pod_details(namespace, pod_name)
+    pod_result = kubectl.get_pod_details(
+        namespace,
+        pod_name,
+        context,
+    )
 
     if pod_result.get("success"):
         evidence["kubernetes"]["pod_details"] = pod_result.get(
-            "stdout", ""
+            "stdout",
+            "",
         )
     else:
         evidence["kubernetes"]["pod_details_error"] = pod_result.get(
@@ -29,6 +39,7 @@ def collect_pod_evidence(namespace: str, pod_name: str):
     endpoint_result = kubectl.get_pod_endpoint(
         namespace,
         pod_name,
+        context,
     )
 
     endpoint = None
