@@ -22,16 +22,19 @@ def health():
         }
 
 
-def metrics():
+def query(query: str):
     try:
         response = requests.get(
-            f"{settings.VICTORIA_METRICS_URL}/metrics",
-            timeout=5,
+            f"{settings.VICTORIA_METRICS_URL}/api/v1/query",
+            params={"query": query},
+            timeout=10,
         )
+
+        response.raise_for_status()
 
         return {
             "success": True,
-            "metrics": response.text,
+            "data": response.json(),
         }
 
     except Exception as e:
@@ -39,3 +42,7 @@ def metrics():
             "success": False,
             "error": str(e),
         }
+
+
+def metrics():
+    return query("up")

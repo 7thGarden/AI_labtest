@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.services import victoriametrics
 
@@ -16,3 +16,8 @@ def health():
 @router.get("/raw")
 def raw_metrics():
     return victoriametrics.metrics()
+
+
+@router.get("/query")
+def query_metrics(query: str = Query(...)):
+    return victoriametrics.query(query)

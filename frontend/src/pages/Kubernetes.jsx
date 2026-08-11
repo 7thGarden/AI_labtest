@@ -5,6 +5,10 @@ export default function Kubernetes() {
   const [nodes, setNodes] = useState([]);
   const [pods, setPods] = useState([]);
 
+  const [selectedPod, setSelectedPod] = useState(null);
+  const [investigation, setInvestigation] = useState("");
+  const [investigating, setInvestigating] = useState(false);
+
   useEffect(() => {
     async function load() {
       try {
@@ -30,6 +34,48 @@ export default function Kubernetes() {
 
     load();
   }, []);
+
+  async function investigatePod(namespace, podName) {
+    setSelectedPod(`${namespace}/${podName}`);
+    setInvestigation("Starting OpenSRE investigation...\n");
+    setInvestigating(true);
+
+    try {
+      const response = await api.get(
+        `/opensre/investigate/pod/${namespace}/${podName}`
+      );
+
+      const data = response.data;
+
+      const stdout = data.stdout || "";
+      const stderr = data.stderr || "";
+
+      let output = "";
+
+      if (stdout) {
+        output += stdout;
+      }
+
+      if (stderr) {
+        output += "\n\n--- STDERR ---\n";
+        output += stderr;
+      }
+
+      if (!output.trim()) {
+        output = "OpenSRE returned no output.";
+      }
+
+      setInvestigation(output);
+    } catch (err) {
+      console.error(err);
+
+      setInvestigation(
+        `Unable to connect to OpenSRE backend.\n\n${err.message}`
+      );
+    } finally {
+      setInvestigating(false);
+    }
+  }
 
   return (
     <>
@@ -81,6 +127,7 @@ export default function Kubernetes() {
               <th align="left">Pod</th>
               <th align="left">Ready</th>
               <th align="left">Status</th>
+              <th align="left">Action</th>
             </tr>
           </thead>
 
@@ -88,18 +135,57 @@ export default function Kubernetes() {
             {pods.map((pod, index) => {
               const cols = pod.trim().split(/\s+/);
 
+              const namespace = cols[0];
+              const podName = cols[1];
+
               return (
                 <tr key={index}>
-                  <td>{cols[0]}</td>
-                  <td>{cols[1]}</td>
+                  <td>{namespace}</td>
+                  <td>{podName}</td>
                   <td>{cols[2]}</td>
                   <td>{cols[3]}</td>
+                  <td>
+                    <button
+                      onClick={() => investigatePod(namespace, podName)}
+                      disabled={investigating}
+                    >
+                      {investigating &&
+                      selectedPod === `${namespace}/${podName}`
+                        ? "Investigating..."
+                        : "Investigate"}
+                    </button>
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+
+      {investigation && (
+        <>
+          <br />
+
+          <div className="table">
+            <h2>OpenSRE Investigation</h2>
+
+            <p>
+              <strong>Pod:</strong> {selectedPod}
+            </p>
+
+            <br />
+
+            <pre
+              style={{
+                whiteSpace: "pre-wrap",
+                textAlign: "left",
+              }}
+            >
+              {investigation}
+            </pre>
+          </div>
+        </>
+      )}
     </>
   );
 }

@@ -1,3 +1,4 @@
+import json
 from app.core.config import settings
 from app.utils.command import run_command
 
@@ -34,5 +35,15 @@ def onboard():
         [
             settings.OPENSRE_BINARY,
             "onboard",
+        ]
+    )
+
+def investigate(alert: dict):
+    return run_command(
+        [
+            settings.OPENSRE_BINARY,
+            "investigate",
+            "--input-json",
+            json.dumps(alert),
         ]
     )
