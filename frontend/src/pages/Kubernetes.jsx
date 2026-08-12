@@ -1,43 +1,73 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import api from "../api/api";
+import Card from "../components/Card";
+import Badge from "../components/Badge";
+import Skeleton from "../components/Skeleton";
+import { extractReport, stripAnsi, podTone, nodeTone, readyTone } from "../utils/opensre";
+import {
+  RefreshCw,
+  Search,
+  Loader2,
+  Cpu,
+  Boxes,
+  AlertTriangle,
+  CheckCircle2,
+  Terminal,
+} from "lucide-react";
 
 export default function Kubernetes() {
   const [nodes, setNodes] = useState([]);
   const [pods, setPods] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [selectedPod, setSelectedPod] = useState(null);
-  const [investigation, setInvestigation] = useState("");
+  const [investigation, setInvestigation] = useState(null);
   const [investigating, setInvestigating] = useState(false);
 
+  const load = useCallback(async () => {
+    const [nodeRes, podRes] = await Promise.all([
+      api.get("/kubernetes/nodes"),
+      api.get("/kubernetes/pods"),
+    ]);
+
+    const splitLines = (output) =>
+      (output || "")
+        .split("\n")
+        .slice(1)
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+    return {
+      nodes: splitLines(nodeRes.data.stdout),
+      pods: splitLines(podRes.data.stdout),
+    };
+  }, []);
+
   useEffect(() => {
-    async function load() {
-      try {
-        const nodeRes = await api.get("/kubernetes/nodes");
-        const podRes = await api.get("/kubernetes/pods");
+    let cancelled = false;
 
-        const nodeLines = nodeRes.data.stdout
-          .split("\n")
-          .slice(1)
-          .filter(Boolean);
-
-        const podLines = podRes.data.stdout
-          .split("\n")
-          .slice(1)
-          .filter(Boolean);
-
+    load().then(
+      ({ nodes: nodeLines, pods: podLines }) => {
+        if (cancelled) return;
         setNodes(nodeLines);
         setPods(podLines);
-      } catch (err) {
+        setLoading(false);
+      },
+      (err) => {
         console.error(err);
+        if (!cancelled) setLoading(false);
       }
-    }
+    );
 
-    load();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [load]);
 
   async function investigatePod(namespace, podName) {
     setSelectedPod(`${namespace}/${podName}`);
-    setInvestigation("Starting OpenSRE investigation...\n");
+    setInvestigation(null);
     setInvestigating(true);
 
     try {
@@ -47,144 +77,288 @@ export default function Kubernetes() {
 
       const data = response.data;
 
-      const stdout = data.stdout || "";
-      const stderr = data.stderr || "";
-
-      let output = "";
-
-      if (stdout) {
-        output += stdout;
+      if (!data.success) {
+        setInvestigation({
+          error: data.stderr || "OpenSRE investigation failed.",
+        });
+      } else {
+        const stdout = stripAnsi(data.stdout || "");
+        const report = extractReport(stdout);
+        setInvestigation({ stdout, report });
       }
-
-      if (stderr) {
-        output += "\n\n--- STDERR ---\n";
-        output += stderr;
-      }
-
-      if (!output.trim()) {
-        output = "OpenSRE returned no output.";
-      }
-
-      setInvestigation(output);
     } catch (err) {
       console.error(err);
-
-      setInvestigation(
-        `Unable to connect to OpenSRE backend.\n\n${err.message}`
-      );
+      setInvestigation({ error: err.message });
     } finally {
       setInvestigating(false);
     }
   }
 
+  const nodeRows = nodes.map((line) => {
+    const cols = line.split(/\s+/);
+    return {
+      name: cols[0],
+      status: cols[1],
+      role: cols[2],
+      version: cols[4],
+      ip: cols[5],
+    };
+  });
+
+  const podRows = pods.map((line) => {
+    const cols = line.split(/\s+/);
+    return {
+      namespace: cols[0],
+      name: cols[1],
+      ready: cols[2],
+      status: cols[3],
+      restarts: cols[4],
+      age: cols[5],
+    };
+  });
+
+  const report = investigation?.report;
+
   return (
     <>
-      <h1>Kubernetes Cluster</h1>
+      <div className="page-head">
+        <div>
+          <h1>Kubernetes</h1>
+          <p className="page-head__sub">
+            Live inventory of nodes and pods across the cluster.
+          </p>
+        </div>
 
-      <div className="table">
-        <h2>Nodes</h2>
-
-        <br />
-
-        <table width="100%">
-          <thead>
-            <tr>
-              <th align="left">Node</th>
-              <th align="left">Status</th>
-              <th align="left">Role</th>
-              <th align="left">Version</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {nodes.map((node, index) => {
-              const cols = node.trim().split(/\s+/);
-
-              return (
-                <tr key={index}>
-                  <td>{cols[0]}</td>
-                  <td>{cols[1]}</td>
-                  <td>{cols[2]}</td>
-                  <td>{cols[4]}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <div className="page-head__actions">
+          <button
+            type="button"
+            className="btn btn--ghost"
+            disabled={refreshing}
+            onClick={() => {
+              setRefreshing(true);
+              load()
+                .then(({ nodes: nodeLines, pods: podLines }) => {
+                  setNodes(nodeLines);
+                  setPods(podLines);
+                })
+                .catch((err) => console.error(err))
+                .finally(() => setRefreshing(false));
+            }}
+          >
+            <RefreshCw size={15} className={refreshing ? "btn__spinner" : ""} />{" "}
+            Refresh
+          </button>
+        </div>
       </div>
 
-      <br />
-
-      <div className="table">
-        <h2>Pods</h2>
-
-        <br />
-
-        <table width="100%">
-          <thead>
-            <tr>
-              <th align="left">Namespace</th>
-              <th align="left">Pod</th>
-              <th align="left">Ready</th>
-              <th align="left">Status</th>
-              <th align="left">Action</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {pods.map((pod, index) => {
-              const cols = pod.trim().split(/\s+/);
-
-              const namespace = cols[0];
-              const podName = cols[1];
-
-              return (
-                <tr key={index}>
-                  <td>{namespace}</td>
-                  <td>{podName}</td>
-                  <td>{cols[2]}</td>
-                  <td>{cols[3]}</td>
-                  <td>
-                    <button
-                      onClick={() => investigatePod(namespace, podName)}
-                      disabled={investigating}
-                    >
-                      {investigating &&
-                      selectedPod === `${namespace}/${podName}`
-                        ? "Investigating..."
-                        : "Investigate"}
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {investigation && (
-        <>
-          <br />
-
-          <div className="table">
-            <h2>OpenSRE Investigation</h2>
-
-            <p>
-              <strong>Pod:</strong> {selectedPod}
-            </p>
-
-            <br />
-
-            <pre
-              style={{
-                whiteSpace: "pre-wrap",
-                textAlign: "left",
-              }}
-            >
-              {investigation}
-            </pre>
+      <Card
+        title="Nodes"
+        subtitle="Cluster node inventory"
+        actions={
+          <Badge tone="info">
+            <Cpu size={13} /> {loading ? "…" : nodes.length}
+          </Badge>
+        }
+      >
+        {loading ? (
+          <div className="stack stack--tight">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} height={44} />
+            ))}
           </div>
-        </>
+        ) : nodeRows.length === 0 ? (
+          <div className="empty-state">
+            <Cpu size={28} /> No nodes detected.
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Status</th>
+                  <th>Role</th>
+                  <th>Version</th>
+                  <th>Internal IP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {nodeRows.map((node, index) => (
+                  <tr key={index}>
+                    <td className="cell-strong cell-mono">{node.name}</td>
+                    <td>
+                      <Badge tone={nodeTone(node.status)}>{node.status}</Badge>
+                    </td>
+                    <td>{node.role || "—"}</td>
+                    <td className="cell-mono cell-muted">{node.version || "—"}</td>
+                    <td className="cell-mono cell-muted">{node.ip || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Card
+        title="Pods"
+        subtitle="All workloads in the cluster"
+        actions={
+          <Badge tone="info">
+            <Boxes size={13} /> {loading ? "…" : pods.length}
+          </Badge>
+        }
+      >
+        {loading ? (
+          <div className="stack stack--tight">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} height={44} />
+            ))}
+          </div>
+        ) : podRows.length === 0 ? (
+          <div className="empty-state">
+            <Boxes size={28} /> No pods detected.
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Namespace</th>
+                  <th>Pod</th>
+                  <th>Ready</th>
+                  <th>Status</th>
+                  <th>Restarts</th>
+                  <th>Age</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {podRows.map((pod, index) => (
+                  <tr key={index}>
+                    <td className="cell-mono cell-muted">{pod.namespace}</td>
+                    <td className="cell-strong cell-mono">{pod.name}</td>
+                    <td>
+                      <Badge tone={readyTone(pod.ready)}>{pod.ready || "—"}</Badge>
+                    </td>
+                    <td>
+                      <Badge tone={podTone(pod.status)}>{pod.status || "—"}</Badge>
+                    </td>
+                    <td className="cell-muted">{pod.restarts || "—"}</td>
+                    <td className="cell-muted">{pod.age || "—"}</td>
+                    <td className="cell-end">
+                      <button
+                        type="button"
+                        className="btn btn--primary btn--sm"
+                        onClick={() => investigatePod(pod.namespace, pod.name)}
+                        disabled={investigating}
+                      >
+                        {investigating &&
+                        selectedPod === `${pod.namespace}/${pod.name}` ? (
+                          <>
+                            <Loader2 size={14} className="btn__spinner" />
+                            Analyzing…
+                          </>
+                        ) : (
+                          <>
+                            <Search size={14} /> Investigate
+                          </>
+                        )}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {selectedPod && investigation && (
+        <Card
+          title="OpenSRE Investigation"
+          subtitle={`Target · ${selectedPod}`}
+          actions={
+            <Badge tone={report ? "success" : "warning"}>
+              {report ? (
+                <>
+                  <CheckCircle2 size={13} /> Complete
+                </>
+              ) : (
+                <>
+                  <AlertTriangle size={13} /> Inconclusive
+                </>
+              )}
+            </Badge>
+          }
+        >
+          {investigation.error ? (
+            <div className="empty-state">
+              <AlertTriangle size={28} />
+              <div>
+                <strong>Investigation failed</strong>
+                <p style={{ marginTop: "var(--space-1)" }}>{investigation.error}</p>
+              </div>
+            </div>
+          ) : (
+            <>
+              {report && (
+                <>
+                  <div className="report-grid">
+                    <div className="report-metric">
+                      <div className="report-metric__label">Root cause</div>
+                      <div className="report-metric__value">
+                        {report.root_cause || "Not determined"}
+                      </div>
+                    </div>
+                    <div className="report-metric">
+                      <div className="report-metric__label">Validity score</div>
+                      <div className="report-metric__value">
+                        {report.validity_score != null
+                          ? `${Math.round(report.validity_score * 100)}%`
+                          : "—"}
+                      </div>
+                    </div>
+                    <div className="report-metric">
+                      <div className="report-metric__label">Classification</div>
+                      <div className="report-metric__value">
+                        {report.is_noise ? "Noise / low signal" : "Incident"}
+                      </div>
+                    </div>
+                  </div>
+
+                  {report.problem_md && (
+                    <div className="report-section">
+                      <div className="report-section__title">Problem framing</div>
+                      <div className="report-section__body">
+                        {stripAnsi(report.problem_md)}
+                      </div>
+                    </div>
+                  )}
+
+                  {report.report && (
+                    <div className="report-section">
+                      <div className="report-section__title">Findings</div>
+                      <div className="report-section__body">
+                        {stripAnsi(report.report)}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {investigation.stdout && (
+                <details className="raw-output">
+                  <summary>
+                    <Terminal size={14} style={{ verticalAlign: "middle" }} />{" "}
+                    Raw CLI output
+                  </summary>
+                  <pre className="code-block">{investigation.stdout}</pre>
+                </details>
+              )}
+            </>
+          )}
+        </Card>
       )}
     </>
   );

@@ -1,15 +1,90 @@
-import { Link } from "react-router-dom";
+import { NavLink } from "react-router-dom";
+import {
+  LayoutDashboard,
+  Container,
+  Activity,
+  BrainCircuit,
+  Settings,
+  Hexagon,
+  X,
+} from "lucide-react";
 
-export default function Sidebar() {
+const NAV = [
+  {
+    section: "Monitor",
+    items: [
+      { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
+      { to: "/kubernetes", label: "Kubernetes", icon: Container },
+      { to: "/metrics", label: "Metrics", icon: Activity },
+    ],
+  },
+  {
+    section: "Intelligence",
+    items: [{ to: "/analysis", label: "AI Analysis", icon: BrainCircuit }],
+  },
+  {
+    section: "System",
+    items: [{ to: "/settings", label: "Settings", icon: Settings }],
+  },
+];
+
+export default function Sidebar({ open, onClose }) {
   return (
-    <div className="sidebar">
-      <h2>OpenSRE</h2>
+    <aside className={`sidebar${open ? " sidebar--open" : ""}`}>
+      <div className="sidebar__brand">
+        <div className="sidebar__logo">
+          <Hexagon size={22} strokeWidth={2.4} />
+        </div>
 
-      <Link to="/">📊 Dashboard</Link>
-      <Link to="/kubernetes">☸ Kubernetes</Link>
-      <Link to="/metrics">📈 Metrics</Link>
-      <Link to="/analysis">🤖 AI Analysis</Link>
-      <Link to="/settings">⚙ Settings</Link>
-    </div>
+        <div>
+          <div className="sidebar__brand-name">OpenSRE</div>
+          <div className="sidebar__brand-sub">Observability</div>
+        </div>
+
+        <button
+          type="button"
+          aria-label="Close navigation"
+          className="sidebar__close"
+          onClick={onClose}
+        >
+          <X size={18} />
+        </button>
+      </div>
+
+      <nav className="sidebar__nav">
+        {NAV.map((group) => (
+          <div key={group.section}>
+            <div className="sidebar__section">{group.section}</div>
+
+            {group.items.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                onClick={onClose}
+                className={({ isActive }) =>
+                  `sidebar__link${isActive ? " sidebar__link--active" : ""}`
+                }
+              >
+                <item.icon size={18} />
+                {item.label}
+              </NavLink>
+            ))}
+          </div>
+        ))}
+      </nav>
+
+      <div className="sidebar__footer">
+        <div className="sidebar__status">
+          <div>
+            <div className="sidebar__status-dot" />
+          </div>
+          <div>
+            <div className="sidebar__status-title">All systems nominal</div>
+            <div className="sidebar__status-sub">kind-opensre-demo</div>
+          </div>
+        </div>
+      </div>
+    </aside>
   );
 }
