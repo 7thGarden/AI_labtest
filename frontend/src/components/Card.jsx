@@ -1,9 +1,16 @@
-export default function Card({ title, value, color = "#2563eb" }) {
+export default function Card({ title, subtitle, actions, children, className = "" }) {
   return (
-    <div className="card">
-      <p className="card-title">{title}</p>
-
-      <h1 style={{ color }}>{value}</h1>
-    </div>
+    <section className={`card ${className}`}>
+      {(title || actions) && (
+        <div className="card__head">
+          <div>
+            {title && <h2 className="card__title">{title}</h2>}
+            {subtitle && <p className="card__subtitle">{subtitle}</p>}
+          </div>
+          {actions && <div className="card__actions">{actions}</div>}
+        </div>
+      )}
+      <div className="card__body">{children}</div>
+    </section>
   );
 }

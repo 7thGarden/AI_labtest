@@ -1,17 +1,18 @@
+import { useState } from "react";
 import Navbar from "./Navbar";
 import Sidebar from "./Sidebar";
 
 export default function Layout({ children }) {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   return (
     <div className="app">
-      <Sidebar />
+      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <div className="main">
-        <Navbar />
+        <Navbar onMenuClick={() => setSidebarOpen(true)} />
 
-        <div className="content">
-          {children}
-        </div>
+        <main className="content">{children}</main>
       </div>
     </div>
   );
