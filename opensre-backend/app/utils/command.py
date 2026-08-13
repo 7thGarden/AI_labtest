@@ -7,7 +7,7 @@ def run_command(command):
             command,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=180,
         )
 
         return {
