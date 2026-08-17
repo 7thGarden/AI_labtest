@@ -12,16 +12,10 @@ import {
   CheckCircle2,
   Sparkles,
   Search,
+  Target,
+  Gauge,
+  ListChecks,
 } from "lucide-react";
-
-function Meta({ label, children }) {
-  return (
-    <div className="report-metric">
-      <div className="report-metric__label">{label}</div>
-      <div className="report-metric__value">{children}</div>
-    </div>
-  );
-}
 
 export default function AIAnalysis() {
   const [version, setVersion] = useState("");
@@ -201,6 +195,25 @@ export default function AIAnalysis() {
   const selectedNamespacePods = pods.filter((pod) => pod.namespace === namespace);
   const report = investigation?.report;
 
+  const validityScore =
+    report?.validity_score != null ? Math.round(report.validity_score * 100) : null;
+
+  const scoreTone =
+    validityScore == null
+      ? "neutral"
+      : validityScore >= 75
+        ? "success"
+        : validityScore >= 40
+          ? "warning"
+          : "danger";
+
+  const recommendedActions =
+    report?.remediation_steps?.length
+      ? report.remediation_steps
+      : report?.investigation_recommendations?.length
+        ? report.investigation_recommendations
+        : [];
+
   return (
     <>
       <div className="page-head">
@@ -346,18 +359,73 @@ export default function AIAnalysis() {
             <>
               {report && (
                 <>
-                  <div className="report-grid">
-                    <Meta label="Root cause">
-                      {report.root_cause || "Not determined"}
-                    </Meta>
-                    <Meta label="Validity score">
-                      {report.validity_score != null
-                        ? `${Math.round(report.validity_score * 100)}%`
-                        : "—"}
-                    </Meta>
-                    <Meta label="Classification">
-                      {report.is_noise ? "Noise / low signal" : "Incident"}
-                    </Meta>
+                  <div className="report-cards">
+                    <div className="report-card report-card--root">
+                      <div className="report-card__icon">
+                        <Target size={18} />
+                      </div>
+                      <div>
+                        <div className="report-card__label">Root cause</div>
+                        <div className="report-card__value">
+                          {report.root_cause || "Not determined"}
+                        </div>
+                        <div className="report-card__meta">
+                          <Badge
+                            tone={report.is_noise ? "warning" : "info"}
+                          >
+                            {report.is_noise
+                              ? "Noise / low signal"
+                              : "Incident"}
+                          </Badge>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="report-card report-card--score">
+                      <div className="report-card__icon">
+                        <Gauge size={18} />
+                      </div>
+                      <div>
+                        <div className="report-card__label">
+                          Validity score
+                        </div>
+                        <div className="report-card__value">
+                          {validityScore != null ? `${validityScore}%` : "—"}
+                        </div>
+                        <div className="score-bar">
+                          <div
+                            className={`score-bar__track score-bar__track--${scoreTone}`}
+                          >
+                            <div
+                              className="score-bar__fill"
+                              style={{
+                                width: `${validityScore ?? 0}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="report-card report-card--actions">
+                      <div className="report-card__icon">
+                        <ListChecks size={18} />
+                      </div>
+                      <div>
+                        <div className="report-card__label">
+                          Recommended actions
+                        </div>
+                        {recommendedActions.length > 0 ? (
+                          <ul className="action-list">
+                            {recommendedActions.map((action, index) => (
+                              <li key={index}>{action}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <div className="report-card__value">—</div>
+                        )}
+                      </div>
+                    </div>
                   </div>
 
                   {report.problem_md && (
