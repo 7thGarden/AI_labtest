@@ -12,21 +12,52 @@ export function stripAnsi(text = "") {
 export function extractReport(stdout = "") {
   const text = stripAnsi(stdout);
 
-  const lastBrace = text.lastIndexOf("{");
-  if (lastBrace === -1) {
-    return null;
-  }
+  let lastValid = null;
+  const stack = [];
+  let inString = false;
+  let escaped = false;
 
-  try {
-    const parsed = JSON.parse(text.slice(lastBrace));
-    if (parsed && typeof parsed === "object" && "report" in parsed) {
-      return parsed;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
     }
-  } catch {
-    return null;
+
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      stack.push(i);
+    } else if (ch === "}") {
+      const start = stack.pop();
+      if (start === undefined) continue;
+
+      let candidate;
+      try {
+        candidate = JSON.parse(text.slice(start, i + 1));
+      } catch {
+        continue;
+      }
+
+      if (
+        candidate &&
+        typeof candidate === "object" &&
+        !Array.isArray(candidate) &&
+        "report" in candidate
+      ) {
+        lastValid = candidate;
+      }
+    }
   }
 
-  return null;
+  return lastValid;
 }
 
 export function podTone(status = "") {
