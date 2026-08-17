@@ -3,6 +3,7 @@ import api from "../api/api";
 import Card from "../components/Card";
 import Badge from "../components/Badge";
 import { extractReport, stripAnsi } from "../utils/opensre";
+import useSessionState from "../hooks/useSessionState";
 import {
   BrainCircuit,
   Loader2,
@@ -20,29 +21,36 @@ import {
 export default function AIAnalysis() {
   const [version, setVersion] = useState("");
 
-  const [clusters, setClusters] = useState([]);
-  const [cluster, setCluster] = useState("");
+  const [clusters, setClusters] = useSessionState("opensre:clusters", []);
+  const [cluster, setCluster] = useSessionState("opensre:cluster", "");
 
-  const [pods, setPods] = useState([]);
-  const [namespace, setNamespace] = useState("");
-  const [podName, setPodName] = useState("");
+  const [pods, setPods] = useSessionState("opensre:pods", []);
+  const [namespace, setNamespace] = useSessionState("opensre:namespace", "");
+  const [podName, setPodName] = useSessionState("opensre:pod", "");
 
-  const [investigation, setInvestigation] = useState(null);
+  const [investigation, setInvestigation] = useSessionState(
+    "opensre:investigation",
+    null
+  );
   const [loading, setLoading] = useState(false);
 
   const [message, setMessage] = useState("");
-  const [chat, setChat] = useState([]);
+  const [chat, setChat] = useSessionState("opensre:chat", []);
   const [chatLoading, setChatLoading] = useState(false);
 
   const [podsLoading, setPodsLoading] = useState(false);
 
   const chatEndRef = useRef(null);
+  const initialDataRef = useRef({ clusters: clusters.length, pods: pods.length });
+  const skipPodLoadRef = useRef(pods.length > 0);
 
   useEffect(() => {
     async function loadInitialData() {
       try {
         const versionRes = await api.get("/opensre/version");
         setVersion(stripAnsi(versionRes.data.stdout || ""));
+
+        if (initialDataRef.current.clusters > 0) return;
 
         const clusterRes = await api.get("/kubernetes/clusters");
         const clusterLines = (clusterRes.data.stdout || "")
@@ -60,13 +68,18 @@ export default function AIAnalysis() {
     }
 
     loadInitialData();
-  }, []);
+  }, [setCluster, setClusters]);
 
   useEffect(() => {
     if (!cluster) {
       setPods([]);
       setNamespace("");
       setPodName("");
+      return;
+    }
+
+    if (skipPodLoadRef.current) {
+      skipPodLoadRef.current = false;
       return;
     }
 
@@ -108,7 +121,7 @@ export default function AIAnalysis() {
     }
 
     loadPods();
-  }, [cluster]);
+  }, [cluster, setInvestigation, setNamespace, setPodName, setPods]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
