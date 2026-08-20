@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { Link } from "react-router-dom";
 import api from "../api/api";
 import Card from "../components/Card";
 import Badge from "../components/Badge";
@@ -13,6 +14,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Terminal,
+  FileText,
 } from "lucide-react";
 
 export default function Kubernetes() {
@@ -70,6 +72,13 @@ export default function Kubernetes() {
     setInvestigation(null);
     setInvestigating(true);
 
+    window.sessionStorage.setItem("opensre:namespace", JSON.stringify(namespace));
+    window.sessionStorage.setItem("opensre:pod", JSON.stringify(podName));
+    window.sessionStorage.setItem(
+      "opensre:investigationTarget",
+      JSON.stringify(`${namespace}/${podName}`)
+    );
+
     try {
       const response = await api.get(
         `/opensre/investigate/pod/${namespace}/${podName}`
@@ -85,6 +94,10 @@ export default function Kubernetes() {
         const stdout = stripAnsi(data.stdout || "");
         const report = extractReport(stdout);
         setInvestigation({ stdout, report });
+        window.sessionStorage.setItem(
+          "opensre:investigation",
+          JSON.stringify({ stdout, report })
+        );
       }
     } catch (err) {
       console.error(err);
@@ -279,17 +292,22 @@ export default function Kubernetes() {
           title="OpenSRE Investigation"
           subtitle={`Target · ${selectedPod}`}
           actions={
-            <Badge tone={report ? "success" : "warning"}>
-              {report ? (
-                <>
-                  <CheckCircle2 size={13} /> Complete
-                </>
-              ) : (
-                <>
-                  <AlertTriangle size={13} /> Inconclusive
-                </>
-              )}
-            </Badge>
+            <>
+              <Link to="/incident" className="btn btn--ghost btn--sm">
+                <FileText size={13} /> View incident report
+              </Link>
+              <Badge tone={report ? "success" : "warning"}>
+                {report ? (
+                  <>
+                    <CheckCircle2 size={13} /> Complete
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle size={13} /> Inconclusive
+                  </>
+                )}
+              </Badge>
+            </>
           }
         >
           {investigation.error ? (

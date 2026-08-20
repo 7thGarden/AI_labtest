@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from "react";
+import { Link } from "react-router-dom";
 import api from "../api/api";
 import Card from "../components/Card";
 import Badge from "../components/Badge";
@@ -16,6 +17,7 @@ import {
   Target,
   Gauge,
   ListChecks,
+  FileText,
 } from "lucide-react";
 
 export default function AIAnalysis() {
@@ -31,6 +33,10 @@ export default function AIAnalysis() {
   const [investigation, setInvestigation] = useSessionState(
     "opensre:investigation",
     null
+  );
+  const [, setInvestigationTarget] = useSessionState(
+    "opensre:investigationTarget",
+    ""
   );
   const [loading, setLoading] = useState(false);
 
@@ -149,6 +155,8 @@ export default function AIAnalysis() {
         const stdout = stripAnsi(data.stdout || "");
         setInvestigation({ stdout, report: extractReport(stdout) });
       }
+
+      setInvestigationTarget(`${namespace}/${podName}`);
     } catch (err) {
       console.error(err);
       setInvestigation({ error: err.message });
@@ -345,17 +353,22 @@ export default function AIAnalysis() {
           title="Investigation report"
           subtitle={`Target · ${namespace}/${podName}`}
           actions={
-            <Badge tone={report ? "success" : "warning"}>
-              {report ? (
-                <>
-                  <CheckCircle2 size={12} /> Analyzed
-                </>
-              ) : (
-                <>
-                  <AlertTriangle size={12} /> Inconclusive
-                </>
-              )}
-            </Badge>
+            <>
+              <Link to="/incident" className="btn btn--ghost btn--sm">
+                <FileText size={13} /> Open incident report
+              </Link>
+              <Badge tone={report ? "success" : "warning"}>
+                {report ? (
+                  <>
+                    <CheckCircle2 size={12} /> Analyzed
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle size={12} /> Inconclusive
+                  </>
+                )}
+              </Badge>
+            </>
           }
         >
           {investigation.error ? (

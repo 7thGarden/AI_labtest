@@ -6,6 +6,7 @@ import Dashboard from "./pages/Dashboard";
 import Kubernetes from "./pages/Kubernetes";
 import Metrics from "./pages/Metrics";
 import AIAnalysis from "./pages/AIAnalysis";
+import Incident from "./pages/Incident";
 import Settings from "./pages/Settings";
 
 function App() {
@@ -16,6 +17,7 @@ function App() {
         <Route path="/kubernetes" element={<Kubernetes />} />
         <Route path="/metrics" element={<Metrics />} />
         <Route path="/analysis" element={<AIAnalysis />} />
+        <Route path="/incident" element={<Incident />} />
         <Route path="/settings" element={<Settings />} />
       </Routes>
     </Layout>

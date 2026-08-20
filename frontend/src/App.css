@@ -940,6 +940,75 @@ details.raw-output summary:hover {
   color: var(--primary);
 }
 
+/* ---------- Incident report ---------- */
+
+.incident-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-4);
+}
+
+.incident-meta__hint {
+  display: block;
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  color: var(--text-3);
+  margin-top: var(--space-1);
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+}
+
+.metric-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
+  background: var(--surface-2);
+  min-width: 0;
+}
+
+.metric-item__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.metric-item__label {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+
+.metric-item__value {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-snug);
+  color: var(--text-2);
+  word-break: break-word;
+}
+
+.report-output {
+  max-height: 560px;
+  margin: 0;
+}
+
+.link {
+  color: var(--primary);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.link:hover {
+  color: var(--primary-hover);
+}
+
 /* ---------- Chat ---------- */
 
 .chat {

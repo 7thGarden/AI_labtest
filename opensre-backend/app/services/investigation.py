@@ -35,6 +35,42 @@ def collect_pod_evidence(
             "Unable to collect pod details",
         )
 
+    # Pod status / restarts
+    status_result = kubectl.get_pod_status(
+        namespace,
+        pod_name,
+        context,
+    )
+
+    if status_result.get("success"):
+        evidence["kubernetes"]["pod_status"] = status_result.get(
+            "stdout",
+            "",
+        )
+    else:
+        evidence["kubernetes"]["pod_status_error"] = status_result.get(
+            "stderr",
+            "Unable to collect pod status",
+        )
+
+    # Pod events
+    events_result = kubectl.get_pod_events(
+        namespace,
+        pod_name,
+        context,
+    )
+
+    if events_result.get("success"):
+        evidence["kubernetes"]["events"] = events_result.get(
+            "stdout",
+            "",
+        )
+    else:
+        evidence["kubernetes"]["events_error"] = events_result.get(
+            "stderr",
+            "Unable to collect pod events",
+        )
+
     # Pod endpoint
     endpoint_result = kubectl.get_pod_endpoint(
         namespace,
