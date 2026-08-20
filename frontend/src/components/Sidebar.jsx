@@ -4,6 +4,7 @@ import {
   Container,
   Activity,
   BrainCircuit,
+  FileText,
   Settings,
   Hexagon,
   X,
@@ -20,7 +21,10 @@ const NAV = [
   },
   {
     section: "Intelligence",
-    items: [{ to: "/analysis", label: "AI Analysis", icon: BrainCircuit }],
+    items: [
+      { to: "/analysis", label: "AI Analysis", icon: BrainCircuit },
+      { to: "/incident", label: "Incident Report", icon: FileText },
+    ],
   },
   {
     section: "System",

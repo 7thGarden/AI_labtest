@@ -96,3 +96,50 @@ export function readyTone(ready = "") {
   }
   return "neutral";
 }
+
+export function parseRestarts(value) {
+  const match = String(value ?? "").match(/(\d+)/);
+  return match ? Number(match[1]) : 0;
+}
+
+export function severityTone(severity = "") {
+  if (severity === "critical") return "danger";
+  if (severity === "high") return "danger";
+  if (severity === "medium") return "warning";
+  return "success";
+}
+
+export function deriveSeverity(status = "", restarts = 0) {
+  const value = String(status || "").toLowerCase();
+
+  if (
+    value.includes("crash") ||
+    value.includes("error") ||
+    value.includes("failed") ||
+    value.includes("evicted") ||
+    value.includes("oom") ||
+    value.includes("unhealthy") ||
+    value.includes("imagepull")
+  ) {
+    return restarts >= 5 ? "critical" : "high";
+  }
+
+  if (
+    value === "pending" ||
+    value === "containercreating" ||
+    value === "terminating" ||
+    value.includes("waiting")
+  ) {
+    return "medium";
+  }
+
+  if (
+    value === "running" ||
+    value === "succeeded" ||
+    value === "completed"
+  ) {
+    return restarts > 3 ? "medium" : "low";
+  }
+
+  return "medium";
+}

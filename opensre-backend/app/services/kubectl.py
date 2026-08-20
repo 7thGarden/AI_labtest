@@ -115,6 +115,60 @@ def get_pod_details(
     return run_command(command)
 
 
+def get_pod_status(
+    namespace: str,
+    pod_name: str,
+    context: str | None = None,
+):
+    command = [
+        "kubectl",
+    ]
+
+    if context:
+        command.extend(["--context", context])
+
+    command.extend(
+        [
+            "get",
+            "pod",
+            pod_name,
+            "-n",
+            namespace,
+            "-o",
+            "wide",
+        ]
+    )
+
+    return run_command(command)
+
+
+def get_pod_events(
+    namespace: str,
+    pod_name: str,
+    context: str | None = None,
+):
+    command = [
+        "kubectl",
+    ]
+
+    if context:
+        command.extend(["--context", context])
+
+    command.extend(
+        [
+            "get",
+            "events",
+            "-n",
+            namespace,
+            "--field-selector",
+            f"involvedObject.name={pod_name}",
+            "--sort-by=.metadata.creationTimestamp",
+        ]
+    )
+
+    return run_command(command)
+
+
 def get_pod_endpoint(
     namespace: str,
     pod_name: str,

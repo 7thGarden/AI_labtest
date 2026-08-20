@@ -8,6 +8,7 @@ const TITLES = [
   { path: "/kubernetes", title: "Kubernetes", subtitle: "Nodes & workloads" },
   { path: "/metrics", title: "Metrics", subtitle: "VictoriaMetrics & Grafana" },
   { path: "/analysis", title: "AI Analysis", subtitle: "OpenSRE investigations" },
+  { path: "/incident", title: "Incident Report", subtitle: "Consolidated incident view" },
   { path: "/settings", title: "Settings", subtitle: "Integration status" },
 ];
 
