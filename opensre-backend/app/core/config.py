@@ -20,5 +20,14 @@ class Settings:
         "http://localhost:3000",
     )
 
+    AEROSPIKE_HOSTS = os.getenv("AEROSPIKE_HOSTS", "127.0.0.1:3000")
+    AEROSPIKE_NAMESPACE = os.getenv("AEROSPIKE_NAMESPACE", "test")
+
+    YUGABYTE_HOST = os.getenv("YUGABYTE_HOST", "127.0.0.1")
+    YUGABYTE_PORT = int(os.getenv("YUGABYTE_PORT", "5433"))
+    YUGABYTE_DATABASE = os.getenv("YUGABYTE_DATABASE", "yugabyte")
+    YUGABYTE_USER = os.getenv("YUGABYTE_USER", "yugabyte")
+    YUGABYTE_PASSWORD = os.getenv("YUGABYTE_PASSWORD", "yugabyte")
+
 
 settings = Settings()
