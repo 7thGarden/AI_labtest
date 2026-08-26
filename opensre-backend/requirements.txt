@@ -26,6 +26,8 @@ requests==2.34.2
 requests-oauthlib==2.0.0
 six==1.17.0
 starlette==1.4.1
+aerospike==12.0.0
+psycopg2-binary==2.9.10
 typing-inspection==0.4.2
 typing_extensions==4.16.0
 urllib3==2.7.0

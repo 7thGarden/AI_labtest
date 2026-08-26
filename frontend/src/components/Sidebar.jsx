@@ -8,6 +8,8 @@ import {
   Settings,
   Hexagon,
   X,
+  Database,
+  HardDrive,
 } from "lucide-react";
 
 const NAV = [
@@ -17,6 +19,13 @@ const NAV = [
       { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
       { to: "/kubernetes", label: "Kubernetes", icon: Container },
       { to: "/metrics", label: "Metrics", icon: Activity },
+    ],
+  },
+  {
+    section: "Databases",
+    items: [
+      { to: "/aerospike", label: "Aerospike", icon: Database },
+      { to: "/yugabyte", label: "YugabyteDB", icon: HardDrive },
     ],
   },
   {
