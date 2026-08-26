@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import api from "../api/api";
 import Card from "../components/Card";
 import Badge from "../components/Badge";
@@ -7,43 +7,50 @@ import {
   CheckCircle2,
   XCircle,
   Loader2,
-  ExternalLink,
 } from "lucide-react";
 
+const POLL_INTERVAL = 30000;
+
 export default function Metrics() {
-  const [status, setStatus] = useState(null);
-  const [checking, setChecking] = useState(true);
+  const [vmStatus, setVmStatus] = useState(null);
+  const [vmChecking, setVmChecking] = useState(true);
 
-  useEffect(() => {
-    async function load() {
-      setChecking(true);
-
-      try {
-        const res = await api.get("/metrics/health");
-        setStatus(res.data.success ? "connected" : "unreachable");
-      } catch {
-        setStatus("backend-offline");
-      } finally {
-        setChecking(false);
-      }
+  const checkVmHealth = useCallback(async () => {
+    setVmChecking(true);
+    try {
+      const res = await api.get("/metrics/health");
+      setVmStatus(res.data.success ? "connected" : "unreachable");
+    } catch {
+      setVmStatus("backend-offline");
+    } finally {
+      setVmChecking(false);
     }
-
-    load();
   }, []);
 
-  const tone =
-    status === "connected"
+  useEffect(() => {
+    checkVmHealth();
+  }, [checkVmHealth]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      checkVmHealth();
+    }, POLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [checkVmHealth]);
+
+  const vmTone =
+    vmStatus === "connected"
       ? "success"
-      : status === "unreachable" || status === "backend-offline"
+      : vmStatus === "unreachable" || vmStatus === "backend-offline"
         ? "danger"
         : "neutral";
 
-  const label =
-    status === "connected"
+  const vmLabel =
+    vmStatus === "connected"
       ? "Connected"
-      : status === "unreachable"
+      : vmStatus === "unreachable"
         ? "Unreachable"
-        : status === "backend-offline"
+        : vmStatus === "backend-offline"
           ? "Backend offline"
           : "Checking…";
 
@@ -58,20 +65,19 @@ export default function Metrics() {
         </div>
       </div>
 
-      <div className="grid-2">
-        <Card
+      <Card
           title="VictoriaMetrics"
           subtitle="Time-series database · health endpoint"
           actions={
-            <Badge tone={tone}>
-              {checking ? (
+            <Badge tone={vmTone}>
+              {vmChecking ? (
                 <Loader2 size={12} className="btn__spinner" />
-              ) : tone === "success" ? (
+              ) : vmTone === "success" ? (
                 <CheckCircle2 size={12} />
               ) : (
                 <XCircle size={12} />
               )}
-              {checking ? "Checking…" : label}
+              {vmChecking ? "Checking…" : vmLabel}
             </Badge>
           }
         >
@@ -89,40 +95,6 @@ export default function Metrics() {
             </div>
           </div>
         </Card>
-
-        <Card
-          title="Grafana"
-          subtitle="Dashboards and alerting"
-          actions={
-            <a
-              href="http://localhost:3000"
-              target="_blank"
-              rel="noreferrer"
-              className="btn btn--ghost btn--sm"
-            >
-              <ExternalLink size={14} /> Open
-            </a>
-          }
-        >
-          <p className="text-muted" style={{ fontSize: 13, maxWidth: 480 }}>
-            Grafana may block being embedded in a page. Use the button above to
-            open the full Grafana experience.
-          </p>
-
-          <iframe
-            title="Grafana"
-            src="http://localhost:3000"
-            width="100%"
-            height="520"
-            style={{
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-sm)",
-              background: "#fff",
-              marginTop: "var(--space-4)",
-            }}
-          />
-        </Card>
-      </div>
     </>
   );
 }
