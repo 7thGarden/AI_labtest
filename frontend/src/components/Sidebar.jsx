@@ -10,6 +10,8 @@ import {
   X,
   Database,
   HardDrive,
+  GitBranch,
+  Plug,
 } from "lucide-react";
 
 const NAV = [
@@ -34,6 +36,10 @@ const NAV = [
       { to: "/analysis", label: "AI Analysis", icon: BrainCircuit },
       { to: "/incident", label: "Incident Report", icon: FileText },
     ],
+  },
+  {
+    section: "Integrations",
+    items: [{ to: "/github", label: "GitHub", icon: GitBranch }],
   },
   {
     section: "System",

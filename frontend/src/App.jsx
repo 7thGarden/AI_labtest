@@ -10,6 +10,7 @@ import Yugabyte from "./pages/Yugabyte";
 import AIAnalysis from "./pages/AIAnalysis";
 import Incident from "./pages/Incident";
 import Settings from "./pages/Settings";
+import GitHub from "./pages/GitHub";
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
         <Route path="/yugabyte" element={<Yugabyte />} />
         <Route path="/analysis" element={<AIAnalysis />} />
         <Route path="/incident" element={<Incident />} />
+        <Route path="/github" element={<GitHub />} />
         <Route path="/settings" element={<Settings />} />
       </Routes>
     </Layout>
