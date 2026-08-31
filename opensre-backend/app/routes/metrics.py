@@ -1,16 +1,21 @@
 from fastapi import APIRouter, Query
 
-from app.services import victoriametrics
+from app.services import victoriametrics, grafana
 
 router = APIRouter(
     prefix="/api/metrics",
-    tags=["VictoriaMetrics"],
+    tags=["Metrics"],
 )
 
 
 @router.get("/health")
 def health():
     return victoriametrics.health()
+
+
+@router.get("/grafana/health")
+def grafana_health():
+    return grafana.health()
 
 
 @router.get("/raw")
