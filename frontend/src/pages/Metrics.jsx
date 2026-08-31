@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   XCircle,
   Loader2,
+  ExternalLink,
 } from "lucide-react";
 
 const POLL_INTERVAL = 30000;
@@ -95,6 +96,41 @@ export default function Metrics() {
             </div>
           </div>
         </Card>
+
+      <div className="section-label" style={{ marginTop: "var(--space-4)" }}>
+        Grafana live dashboard
+      </div>
+
+      <Card
+        title="Catalog API Overview"
+        subtitle="Live metrics rendered by Grafana (VictoriaMetrics datasource)"
+        actions={
+          <a
+            href="http://localhost:3000/d/catalog-api-overview/catalog-api-overview?from=now-6h&to=now&refresh=5s"
+            target="_blank"
+            rel="noreferrer"
+            className="btn btn--ghost btn--sm"
+          >
+            <ExternalLink size={14} /> Open in Grafana
+          </a>
+        }
+      >
+        <iframe
+          src="http://localhost:3000/d/catalog-api-overview/catalog-api-overview?from=now-5m&to=now&refresh=5s&kiosk&theme=dark"
+          title="Grafana: Catalog API Overview"
+          style={{
+            width: "100%",
+            height: 720,
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+            background: "var(--surface-2, #111)",
+          }}
+          frameBorder="0"
+        />
+        <div className="text-muted" style={{ fontSize: 12, marginTop: "var(--space-2)" }}>
+          Auto-refreshes every 5 seconds. All panels query VictoriaMetrics in real time.
+        </div>
+      </Card>
     </>
   );
 }

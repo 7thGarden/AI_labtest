@@ -1,0 +1,53 @@
+OPEN SRE DEMO STARTUP
+
+1. Start Kubernetes
+
+sudo podman start opensre-demo-control-plane opensre-demo-worker
+
+kubectl get nodes
+kubectl get pods -A
+
+
+2. Grafana
+
+kubectl port-forward -n observability svc/grafana 3000:80
+
+Open: http://localhost:3000
+
+
+3. VictoriaMetrics
+
+kubectl port-forward -n observability svc/victoriametrics-victoria-metrics-single-server 8428:8428
+
+Check:
+curl http://localhost:8428/-/healthy
+
+
+4. OpenTelemetry
+
+kubectl port-forward -n observability svc/otel-collector-opentelemetry-collector 4317:4317 4318:4318
+
+
+5. Backend
+
+cd ~/Projects/opensre-demo/opensre-backend
+source .venv/bin/activate
+uvicorn app.main:app --reload --port 8001
+
+
+6. Frontend
+
+cd ~/Projects/opensre-demo/frontend
+npm run dev
+
+Open: http://localhost:5173
+
+
+DEMO FLOW
+
+Frontend → Select Cluster → Select Namespace → Select Pod
+→ Investigate → OpenSRE + Gemini → RCA
+
+Grafana → Show metrics/observability
+VictoriaMetrics → Metrics backend
+OpenTelemetry → Telemetry collector
