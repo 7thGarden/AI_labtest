@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: traffic-gen
+  namespace: opensre
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: traffic-gen
+
+  template:
+    metadata:
+      labels:
+        app: traffic-gen
+
+    spec:
+      containers:
+        - name: traffic-gen
+          image: docker.io/curlimages/curl:8.9.1
+          imagePullPolicy: IfNotPresent
+
+          command:
+            - /bin/sh
+            - -c
+            - |
+              CATALOG=http://catalog-api.opensre.svc.cluster.local:8000
+              FLAKY=http://flaky-service.opensre.svc.cluster.local:8000
+              while true; do
+                # steady healthy catalog traffic
+                curl -s -o /dev/null $CATALOG/products
+                curl -s -o /dev/null $CATALOG/products
+                curl -s -o /dev/null $CATALOG/health
+                # order service traffic (mix of 200/500)
+                curl -s -o /dev/null $FLAKY/orders
+                curl -s -o /dev/null $FLAKY/orders
+                sleep 0.3
+                # occasional latency spike (concurrent slow calls)
+                for i in 1 2 3; do
+                  curl -s -o /dev/null $FLAKY/slow &
+                done
+                wait
+                sleep 1.5
+              done
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 300m
+              memory: 128Mi

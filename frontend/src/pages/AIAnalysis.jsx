@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import api from "../api/api";
 import Card from "../components/Card";
 import Badge from "../components/Badge";
-import { extractReport, stripAnsi } from "../utils/opensre";
+import ProblemFraming from "../components/ProblemFraming";
+import ReportFindings from "../components/ReportFindings";
+import { extractReport, extractRecommendedActions, stripAnsi } from "../utils/opensre";
 import useSessionState from "../hooks/useSessionState";
 import {
   BrainCircuit,
@@ -18,6 +20,9 @@ import {
   Gauge,
   ListChecks,
   FileText,
+  Database,
+  HardDrive,
+  Layers,
 } from "lucide-react";
 
 export default function AIAnalysis() {
@@ -30,11 +35,14 @@ export default function AIAnalysis() {
   const [namespace, setNamespace] = useSessionState("opensre:namespace", "");
   const [podName, setPodName] = useSessionState("opensre:pod", "");
 
+  const [targetType, setTargetType] = useSessionState("opensre:targetType", "pod");
+  const [dbHealth, setDbHealth] = useState(null);
+
   const [investigation, setInvestigation] = useSessionState(
     "opensre:investigation",
     null
   );
-  const [, setInvestigationTarget] = useSessionState(
+  const [investigationTarget, setInvestigationTarget] = useSessionState(
     "opensre:investigationTarget",
     ""
   );
@@ -133,17 +141,77 @@ export default function AIAnalysis() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chat, chatLoading]);
 
+  useEffect(() => {
+    if (targetType === "pod") {
+      setDbHealth(null);
+      return;
+    }
+
+    let cancelled = false;
+    setDbHealth(null);
+
+    if (targetType === "stack") {
+      Promise.all([
+        api.get("/metrics/health"),
+        api.get("/metrics/grafana/health"),
+      ])
+        .then(([vmRes, grafanaRes]) => {
+          if (cancelled) return;
+
+          const vmOk = !!vmRes.data?.success;
+          const grafanaOk = !!grafanaRes.data?.success;
+
+          setDbHealth({
+            success: vmOk && grafanaOk,
+            label: `${vmOk ? "VM up" : "VM down"} · ${grafanaOk ? "Grafana up" : "Grafana down"}`,
+          });
+        })
+        .catch(() => {
+          if (!cancelled) setDbHealth(null);
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    api
+      .get(`/${targetType}/health`)
+      .then((res) => {
+        if (!cancelled) setDbHealth(res.data);
+      })
+      .catch(() => {
+        if (!cancelled) setDbHealth(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [targetType]);
+
   async function investigatePod() {
-    if (!namespace || !podName) return;
+    if (targetType === "pod" && (!namespace || !podName)) return;
 
     setLoading(true);
     setInvestigation(null);
 
     try {
-      const response = await api.get(
-        `/opensre/investigate/pod/${namespace}/${podName}`,
-        { params: { context: cluster } }
-      );
+      let response;
+
+      if (targetType === "pod") {
+        response = await api.get(
+          `/opensre/investigate/pod/${namespace}/${podName}`,
+          { params: { context: cluster } }
+        );
+      } else if (targetType === "stack") {
+        response = await api.get("/opensre/investigate/stack", {
+          params: { context: cluster },
+        });
+      } else {
+        response = await api.get(
+          `/opensre/investigate/target/${targetType}`
+        );
+      }
 
       const data = response.data;
 
@@ -156,7 +224,13 @@ export default function AIAnalysis() {
         setInvestigation({ stdout, report: extractReport(stdout) });
       }
 
-      setInvestigationTarget(`${namespace}/${podName}`);
+      setInvestigationTarget(
+        targetType === "pod"
+          ? `${namespace}/${podName}`
+          : targetType === "stack"
+            ? "Full stack (all components)"
+            : targetType
+      );
     } catch (err) {
       console.error(err);
       setInvestigation({ error: err.message });
@@ -174,12 +248,20 @@ export default function AIAnalysis() {
     setChatLoading(true);
 
     try {
-      const response = await api.post("/opensre/chat", {
-        message: text,
-        cluster,
-        namespace,
-        pod: podName,
-      });
+      const payload = { message: text };
+
+      if (targetType === "pod") {
+        payload.cluster = cluster;
+        payload.namespace = namespace;
+        payload.pod = podName;
+      } else {
+        if (targetType === "stack") {
+          payload.cluster = cluster;
+        }
+        payload.target_type = targetType;
+      }
+
+      const response = await api.post("/opensre/chat", payload);
 
       const data = response.data;
       const output = [
@@ -228,12 +310,7 @@ export default function AIAnalysis() {
           ? "warning"
           : "danger";
 
-  const recommendedActions =
-    report?.remediation_steps?.length
-      ? report.remediation_steps
-      : report?.investigation_recommendations?.length
-        ? report.investigation_recommendations
-        : [];
+  const recommendedActions = extractRecommendedActions(report);
 
   return (
     <>
@@ -262,7 +339,11 @@ export default function AIAnalysis() {
             type="button"
             className="btn btn--primary"
             onClick={investigatePod}
-            disabled={loading || podsLoading || !namespace || !podName}
+            disabled={
+              loading ||
+              podsLoading ||
+              (targetType === "pod" && (!namespace || !podName))
+            }
           >
             {loading ? (
               <>
@@ -278,66 +359,121 @@ export default function AIAnalysis() {
       >
         <div className="form-grid">
           <div className="field">
-            <label htmlFor="ai-cluster">Cluster</label>
+            <label htmlFor="ai-target">Target</label>
             <select
-              id="ai-cluster"
+              id="ai-target"
               className="select"
-              value={cluster}
-              onChange={(e) => setCluster(e.target.value)}
-              disabled={clusters.length === 0}
+              value={targetType}
+              onChange={(e) => setTargetType(e.target.value)}
             >
-              {clusters.length === 0 && <option value="">No contexts</option>}
-              {clusters.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
+              <option value="pod">Kubernetes pod</option>
+              <option value="aerospike">Aerospike</option>
+              <option value="yugabyte">YugabyteDB</option>
+              <option value="stack">Full stack</option>
             </select>
           </div>
 
-          <div className="field">
-            <label htmlFor="ai-namespace">Namespace</label>
-            <select
-              id="ai-namespace"
-              className="select"
-              value={namespace}
-              onChange={(e) => {
-                const newNamespace = e.target.value;
-                setNamespace(newNamespace);
-                setPodName(
-                  pods.find((pod) => pod.namespace === newNamespace)?.name || ""
-                );
-              }}
-              disabled={podsLoading || namespaces.length === 0}
-            >
-              {namespaces.length === 0 && <option value="">Loading…</option>}
-              {namespaces.map((ns) => (
-                <option key={ns} value={ns}>
-                  {ns}
-                </option>
-              ))}
-            </select>
-          </div>
+          {targetType === "pod" ? (
+            <>
+              <div className="field">
+                <label htmlFor="ai-cluster">Cluster</label>
+                <select
+                  id="ai-cluster"
+                  className="select"
+                  value={cluster}
+                  onChange={(e) => setCluster(e.target.value)}
+                  disabled={clusters.length === 0}
+                >
+                  {clusters.length === 0 && <option value="">No contexts</option>}
+                  {clusters.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-          <div className="field">
-            <label htmlFor="ai-pod">Pod</label>
-            <select
-              id="ai-pod"
-              className="select"
-              value={podName}
-              onChange={(e) => setPodName(e.target.value)}
-              disabled={podsLoading || selectedNamespacePods.length === 0}
-            >
-              {selectedNamespacePods.length === 0 && (
-                <option value="">Loading…</option>
-              )}
-              {selectedNamespacePods.map((pod) => (
-                <option key={pod.name} value={pod.name}>
-                  {pod.name}
-                </option>
-              ))}
-            </select>
-          </div>
+              <div className="field">
+                <label htmlFor="ai-namespace">Namespace</label>
+                <select
+                  id="ai-namespace"
+                  className="select"
+                  value={namespace}
+                  onChange={(e) => {
+                    const newNamespace = e.target.value;
+                    setNamespace(newNamespace);
+                    setPodName(
+                      pods.find((pod) => pod.namespace === newNamespace)?.name || ""
+                    );
+                  }}
+                  disabled={podsLoading || namespaces.length === 0}
+                >
+                  {namespaces.length === 0 && <option value="">Loading…</option>}
+                  {namespaces.map((ns) => (
+                    <option key={ns} value={ns}>
+                      {ns}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="field">
+                <label htmlFor="ai-pod">Pod</label>
+                <select
+                  id="ai-pod"
+                  className="select"
+                  value={podName}
+                  onChange={(e) => setPodName(e.target.value)}
+                  disabled={podsLoading || selectedNamespacePods.length === 0}
+                >
+                  {selectedNamespacePods.length === 0 && (
+                    <option value="">Loading…</option>
+                  )}
+                  {selectedNamespacePods.map((pod) => (
+                    <option key={pod.name} value={pod.name}>
+                      {pod.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
+          ) : (
+            <div className="field">
+              <label>Service</label>
+              <div className="target-readout">
+                <span className="target-readout__icon">
+                  {targetType === "stack" ? (
+                    <Layers size={16} />
+                  ) : targetType === "aerospike" ? (
+                    <Database size={16} />
+                  ) : (
+                    <HardDrive size={16} />
+                  )}
+                </span>
+                <div className="target-readout__body">
+                  <div className="target-readout__name">
+                    {targetType === "stack"
+                      ? "Observability stack"
+                      : targetType === "aerospike"
+                        ? "Aerospike"
+                        : "YugabyteDB"}
+                  </div>
+                  <div className="target-readout__meta">
+                    {targetType === "stack"
+                      ? "K8s · VictoriaMetrics · OTel · Grafana"
+                      : targetType === "aerospike"
+                        ? "Host container · 127.0.0.1:3001"
+                        : "Host container · 127.0.0.1:5433"}
+                  </div>
+                </div>
+                {dbHealth && (
+                  <Badge tone={dbHealth.success ? "success" : "danger"}>
+                    {dbHealth.label ?? (dbHealth.success ? "Up" : "Down")}
+                  </Badge>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {podsLoading && (
@@ -351,7 +487,7 @@ export default function AIAnalysis() {
       {investigation && (
         <Card
           title="Investigation report"
-          subtitle={`Target · ${namespace}/${podName}`}
+          subtitle={`Target · ${investigationTarget}`}
           actions={
             <>
               <Link to="/incident" className="btn btn--ghost btn--sm">
@@ -455,23 +591,14 @@ export default function AIAnalysis() {
                   </div>
 
                   {report.problem_md && (
-                    <div className="report-section">
-                      <div className="report-section__title">
-                        Problem framing
-                      </div>
-                      <div className="report-section__body">
-                        {stripAnsi(report.problem_md)}
-                      </div>
-                    </div>
+                    <ProblemFraming
+                      markdown={report.problem_md}
+                      cluster={cluster}
+                    />
                   )}
 
                   {report.report && (
-                    <div className="report-section">
-                      <div className="report-section__title">Findings</div>
-                      <div className="report-section__body">
-                        {stripAnsi(report.report)}
-                      </div>
-                    </div>
+                    <ReportFindings markdown={report.report} />
                   )}
                 </>
               )}
@@ -494,7 +621,7 @@ export default function AIAnalysis() {
         title="Assistant"
         subtitle="Ask OpenSRE questions about the selected workload"
       >
-        {cluster && (
+        {targetType === "pod" && cluster && (
           <div className="chat__context">
             <span className="chat__context-chip">
               Cluster <span>{cluster || "—"}</span>
@@ -504,6 +631,14 @@ export default function AIAnalysis() {
             </span>
             <span className="chat__context-chip">
               Pod <span>{podName || "—"}</span>
+            </span>
+          </div>
+        )}
+
+        {targetType !== "pod" && (
+          <div className="chat__context">
+            <span className="chat__context-chip">
+              Target <span>{targetType}</span>
             </span>
           </div>
         )}

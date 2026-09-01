@@ -14,6 +14,13 @@ kubectl port-forward -n observability svc/grafana 3000:80
 
 Open: http://localhost:3000
 
+NOTE: the "OpenSRE Cluster & Pod Overview" dashboard is provisioned via
+observability/grafana-values.yaml. After changing that file, reload it:
+
+helm upgrade grafana grafana/grafana \
+  -n observability \
+  -f observability/grafana-values.yaml
+
 
 3. VictoriaMetrics
 
@@ -43,11 +50,18 @@ npm run dev
 Open: http://localhost:5173
 
 
+7. Aerospike & Yugabyte
+
+docker start aerospike
+docker start yugabyte
+
+
 DEMO FLOW
 
-Frontend → Select Cluster → Select Namespace → Select Pod
-→ Investigate → OpenSRE + Gemini → RCA
+Frontend → Metrics page → pick Instance / Node / Pod
+→ embedded Grafana dashboard re-filters live
 
+Frontend → Kubernetes page → Investigate pod → OpenSRE + Gemini → RCA
 Grafana → Show metrics/observability
 VictoriaMetrics → Metrics backend
 OpenTelemetry → Telemetry collector

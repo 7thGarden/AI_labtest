@@ -39,6 +39,8 @@ def write(namespace: str, set_name: str, key: str, bins: dict):
     try:
         client = get_client()
         key_tuple = (namespace, set_name, key)
+        bins = dict(bins)
+        bins["_key"] = key
         client.put(key_tuple, bins)
         client.close()
         return {"success": True, "message": "Record written"}
@@ -64,7 +66,14 @@ def scan(namespace: str, set_name: str):
         client = get_client()
         records = []
         scan = client.scan(namespace, set_name)
-        scan.foreach(lambda r: records.append({"key": r[0][2], "bins": r[2]}))
+        scan.foreach(
+            lambda r: records.append(
+                {
+                    "key": r[2].get("_key") or r[0][2] or "",
+                    "bins": {k: v for k, v in r[2].items() if k != "_key"},
+                }
+            )
+        )
         client.close()
         return {"success": True, "data": records}
     except Exception as e:

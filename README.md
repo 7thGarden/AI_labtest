@@ -122,6 +122,10 @@ opensre-demo/
 │   ├── vmagent-values.yaml
 │   └── grafana-values.yaml
 │
+├── chaos/
+│   ├── runbook.sh
+│   └── README.md
+│
 ├── docker-compose.yml
 │
 └── README.md
@@ -428,6 +432,33 @@ GITHUB_REPO=owner/repo-name
 Create a Personal Access Token at https://github.com/settings/tokens (scope: `repo` for private repos or `public_repo` for public repos).
 
 Restart the backend after editing `.env`.
+
+---
+
+# 🎭 Chaos Engineering / Failure Demo
+
+This project ships with a chaos runbook to inject real failures into YugabyteDB,
+Aerospike, and the Kubernetes cluster so they can be observed and analyzed live
+through the OpenSRE dashboard. See [`chaos/README.md`](chaos/README.md) for the
+full guide.
+
+```bash
+# Show current state (read-only)
+./chaos/runbook.sh status
+
+# Inject a failure
+./chaos/runbook.sh aerospike-down      # Aerospike container down
+./chaos/runbook.sh yugabyte-down       # YugabyteDB container down
+./chaos/runbook.sh pod-crash           # Force catalog-api crash/restart
+./chaos/runbook.sh pod-cpu             # CPU spike in catalog-api pod
+./chaos/runbook.sh pod-memory          # Memory spike in catalog-api pod
+./chaos/runbook.sh system-pod-kill     # Kill a kube-system pod (self-healing)
+./chaos/runbook.sh node-cordon         # Cordon the worker node
+./chaos/runbook.sh node-drain          # Drain the worker node
+
+# Recover
+./chaos/runbook.sh recover all
+```
 
 ---
 

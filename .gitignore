@@ -1,6 +1,10 @@
+.env
+*.env
+*.env.local
 opensre-backend/.env
 __pycache__/
 *.pyc
-__pycache__/
-*.pyc
-.env
+*.pyo
+node_modules/
+dist/
+.venv/

@@ -60,6 +60,71 @@ export function extractReport(stdout = "") {
   return lastValid;
 }
 
+const ACTION_SECTION_RE =
+  /^(?:#{1,4}\s+|\*{1,3})\s*(recommended actions|recommendations|recommended next steps|next steps|recommended remediation|remediation actions|actions)\s*\*{0,3}:?\s*$/i;
+
+const EMPHASIS_RE = /\*\*([^*]+)\*\*|\*([^*]+)\*/g;
+
+function cleanAction(text = "") {
+  return text
+    .replace(EMPHASIS_RE, "$1$2")
+    .replace(/[`_]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function extractRecommendedActions(report = {}) {
+  if (
+    Array.isArray(report.remediation_steps) &&
+    report.remediation_steps.length
+  ) {
+    return report.remediation_steps;
+  }
+
+  if (
+    Array.isArray(report.investigation_recommendations) &&
+    report.investigation_recommendations.length
+  ) {
+    return report.investigation_recommendations;
+  }
+
+  const lines = stripAnsi(report.report || "").split("\n");
+  const actions = [];
+  let inSection = false;
+
+  for (const raw of lines) {
+    const trimmed = raw.replace(/\s+$/, "").trim();
+
+    if (!trimmed) continue;
+
+    if (ACTION_SECTION_RE.test(trimmed)) {
+      inSection = true;
+      continue;
+    }
+
+    if (!inSection) continue;
+
+    const nextHeading = trimmed.match(/^(?:#{1,4}\s+|\*{1,3})[^*]/);
+
+    if (nextHeading) {
+      inSection = false;
+      continue;
+    }
+
+    const bullet = trimmed.match(/^[\u2022\-\*]\s+(.+)$/);
+    const numbered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+
+    const item = bullet ? bullet[1] : numbered ? numbered[1] : null;
+
+    if (item) {
+      const clean = cleanAction(item);
+      if (clean) actions.push(clean);
+    }
+  }
+
+  return actions;
+}
+
 export function podTone(status = "") {
   const value = status.toLowerCase();
 
