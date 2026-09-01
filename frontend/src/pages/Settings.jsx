@@ -72,7 +72,8 @@ export default function Settings() {
         label: "OpenSRE CLI",
         endpoint: "AI investigation engine",
         check: async () => {
-          await api.get("/opensre/version");
+          const res = await api.get("/opensre/version");
+          if (!res.data.success) return "Not installed";
           return "Installed";
         },
       },
@@ -127,6 +128,11 @@ export default function Settings() {
       value !== "Offline" &&
       value !== "NotFound"
     );
+  }
+
+  function badgeTone(value) {
+    if (value === "Not installed") return "neutral";
+    return isOk(value) ? "success" : "danger";
   }
 
   return (
@@ -198,7 +204,7 @@ export default function Settings() {
                       <td className="cell-strong">{item.label}</td>
                       <td className="cell-mono cell-muted">{item.endpoint}</td>
                       <td className="cell-end">
-                        <Badge tone={isOk(item.value) ? "success" : "danger"}>
+                        <Badge tone={badgeTone(item.value)}>
                           {item.value}
                         </Badge>
                       </td>

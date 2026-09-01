@@ -37,3 +37,24 @@ def pod_evidence(
         pod_name,
         context,
     )
+
+
+@router.get("/evidence/target/{target_type}")
+def target_evidence(target_type: str):
+    """
+    Collect structured evidence for a host service target (Aerospike /
+    YugabyteDB) without running an AI investigation.
+    """
+    return investigation.collect_target_evidence(target_type)
+
+
+@router.get("/evidence/stack")
+def stack_evidence(
+    context: str | None = Query(default=None),
+):
+    """
+    Collect structured evidence for the full observability stack
+    (Kubernetes, VictoriaMetrics, OpenTelemetry, Grafana) without
+    running an AI investigation.
+    """
+    return investigation.collect_stack_evidence(context)

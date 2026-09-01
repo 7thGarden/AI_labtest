@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 
 metadata:
-  name: catalog-api
+  name: flaky-service
   namespace: opensre
 
 spec:
@@ -10,12 +10,12 @@ spec:
 
   selector:
     matchLabels:
-      app: catalog-api
+      app: flaky-service
 
   template:
     metadata:
       labels:
-        app: catalog-api
+        app: flaky-service
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8000"
@@ -23,12 +23,20 @@ spec:
 
     spec:
       containers:
-        - name: catalog-api
-          image: localhost/catalog-api:v1
-          imagePullPolicy: Never
+        - name: flaky-service
+          image: localhost/flaky-service:v1
+          imagePullPolicy: IfNotPresent
 
           ports:
             - containerPort: 8000
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
 
           readinessProbe:
             httpGet:
@@ -43,3 +51,20 @@ spec:
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: flaky-service
+  namespace: opensre
+
+spec:
+  selector:
+    app: flaky-service
+
+  ports:
+    - port: 8000
+      targetPort: 8000
+
+  type: ClusterIP

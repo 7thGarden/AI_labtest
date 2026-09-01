@@ -4,9 +4,12 @@ import api from "../api/api";
 import Card from "../components/Card";
 import Badge from "../components/Badge";
 import Skeleton from "../components/Skeleton";
+import ProblemFraming from "../components/ProblemFraming";
+import ReportFindings from "../components/ReportFindings";
 import useSessionState from "../hooks/useSessionState";
 import {
   extractReport,
+  extractRecommendedActions,
   stripAnsi,
   podTone,
   deriveSeverity,
@@ -291,11 +294,7 @@ export default function Incident() {
       : null;
 
   const recommendedActions =
-    reportObj?.remediation_steps?.length
-      ? reportObj.remediation_steps
-      : reportObj?.investigation_recommendations?.length
-        ? reportObj.investigation_recommendations
-        : [];
+    reportObj ? extractRecommendedActions(reportObj) : [];
 
   function metricsRows() {
     return METRIC_ITEMS.map(({ key, label, unit }) => {
@@ -965,23 +964,14 @@ export default function Incident() {
                 )}
 
                 {reportObj.problem_md && (
-                  <div className="report-section">
-                    <div className="report-section__title">
-                      Problem framing
-                    </div>
-                    <div className="report-section__body">
-                      {stripAnsi(reportObj.problem_md)}
-                    </div>
-                  </div>
-                )}
+                    <ProblemFraming
+                      markdown={reportObj.problem_md}
+                      cluster={cluster}
+                    />
+                  )}
 
                 {reportObj.report && (
-                  <div className="report-section">
-                    <div className="report-section__title">Findings</div>
-                    <div className="report-section__body">
-                      {stripAnsi(reportObj.report)}
-                    </div>
-                  </div>
+                  <ReportFindings markdown={reportObj.report} />
                 )}
 
                 {reportObj.evidence && (

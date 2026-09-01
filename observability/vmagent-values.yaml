@@ -10,6 +10,21 @@ config:
       kubernetes_sd_configs:
         - role: pod
 
+      relabel_configs:
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
+        - source_labels: [__meta_kubernetes_pod_node_name]
+          target_label: node
+        - source_labels: [__meta_kubernetes_pod_container_name]
+          target_label: container
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+          action: keep
+          regex: true
+        - source_labels: [__address__]
+          target_label: instance
+
     - job_name: catalog-api
       metrics_path: /metrics
       static_configs:

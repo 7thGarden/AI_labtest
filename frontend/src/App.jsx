@@ -11,6 +11,7 @@ import AIAnalysis from "./pages/AIAnalysis";
 import Incident from "./pages/Incident";
 import Settings from "./pages/Settings";
 import GitHub from "./pages/GitHub";
+import Chaos from "./pages/Chaos";
 
 function App() {
   return (
@@ -24,6 +25,7 @@ function App() {
         <Route path="/analysis" element={<AIAnalysis />} />
         <Route path="/incident" element={<Incident />} />
         <Route path="/github" element={<GitHub />} />
+        <Route path="/chaos" element={<Chaos />} />
         <Route path="/settings" element={<Settings />} />
       </Routes>
     </Layout>

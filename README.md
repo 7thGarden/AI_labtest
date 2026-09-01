@@ -16,6 +16,8 @@ The project demonstrates how modern observability tools can be integrated with A
 - VictoriaMetrics
 - vmagent
 - Grafana
+- Aerospike Database
+- YugabyteDB Database
 
 ### Backend
 
@@ -24,6 +26,9 @@ The project demonstrates how modern observability tools can be integrated with A
 - OpenSRE CLI Integration
 - VictoriaMetrics Health Check
 - Command Execution Layer
+- GitHub Integration (commits, branches, workflows, issues)
+- Aerospike Connector
+- YugabyteDB Connector
 
 ### Frontend
 
@@ -31,6 +36,9 @@ The project demonstrates how modern observability tools can be integrated with A
 - Kubernetes Overview
 - Metrics Page
 - AI Analysis
+- GitHub Integration
+- Aerospike Console
+- YugabyteDB Console
 - Settings Page
 
 ---
@@ -83,6 +91,9 @@ The project demonstrates how modern observability tools can be integrated with A
 | Metrics Collection | vmagent |
 | Telemetry | OpenTelemetry Collector |
 | Visualization | Grafana |
+| NoSQL Database | Aerospike |
+| Distributed SQL Database | YugabyteDB |
+| Source Control Integration | GitHub API |
 | AI | OpenSRE |
 | Language | Python 3.13 |
 | Package Manager | pip |
@@ -108,7 +119,14 @@ opensre-demo/
 │
 ├── observability/
 │   ├── otel-values.yaml
-│   └── vmagent-values.yaml
+│   ├── vmagent-values.yaml
+│   └── grafana-values.yaml
+│
+├── chaos/
+│   ├── runbook.sh
+│   └── README.md
+│
+├── docker-compose.yml
 │
 └── README.md
 ```
@@ -245,11 +263,15 @@ helm install victoriametrics vm/victoria-metrics-single \
 
 ## Grafana
 
+The Grafana chart is deployed with a VictoriaMetrics datasource and a pre-provisioned **"Catalog API Overview"** dashboard (viewable live inside the Metrics page):
+
 ```bash
 helm install grafana grafana/grafana \
   -n observability \
-  --set adminPassword=admin123
+  -f observability/grafana-values.yaml
 ```
+
+The values file enables anonymous Viewer access and iframe embedding so the dashboard harts can be rendered live in the React frontend. Login with `admin` / `admin123` for full access.
 
 ---
 
@@ -378,6 +400,68 @@ http://localhost:5173
 
 ---
 
+## Start the Databases (Aerospike & YugabyteDB)
+
+The backend connects to Aerospike and YugabyteDB for the database analytics pages. Start them with Docker Compose:
+
+```bash
+docker compose up -d
+```
+
+Or with Podman:
+
+```bash
+podman run -d --name aerospike -p 3001:3000 docker.io/aerospike/aerospike-server
+podman run -d --name yugabyte --network host docker.io/yugabytedb/yugabyte \
+  bin/yugabyted start --daemon=false --listen=0.0.0.0
+```
+
+YugabyteDB's YSQL (PostgreSQL-compatible API) listens on `localhost:5433` and Aerospike on `localhost:3001`.
+
+---
+
+### Configure GitHub
+
+Copy the integration credentials into `opensre-backend/.env`:
+
+```
+GITHUB_TOKEN=ghp_xxxxx
+GITHUB_REPO=owner/repo-name
+```
+
+Create a Personal Access Token at https://github.com/settings/tokens (scope: `repo` for private repos or `public_repo` for public repos).
+
+Restart the backend after editing `.env`.
+
+---
+
+# 🎭 Chaos Engineering / Failure Demo
+
+This project ships with a chaos runbook to inject real failures into YugabyteDB,
+Aerospike, and the Kubernetes cluster so they can be observed and analyzed live
+through the OpenSRE dashboard. See [`chaos/README.md`](chaos/README.md) for the
+full guide.
+
+```bash
+# Show current state (read-only)
+./chaos/runbook.sh status
+
+# Inject a failure
+./chaos/runbook.sh aerospike-down      # Aerospike container down
+./chaos/runbook.sh yugabyte-down       # YugabyteDB container down
+./chaos/runbook.sh pod-crash           # Force catalog-api crash/restart
+./chaos/runbook.sh pod-cpu             # CPU spike in catalog-api pod
+./chaos/runbook.sh pod-memory          # Memory spike in catalog-api pod
+./chaos/runbook.sh system-pod-kill     # Kill a kube-system pod (self-healing)
+./chaos/runbook.sh node-cordon         # Cordon the worker node
+./chaos/runbook.sh node-drain          # Drain the worker node
+
+# Recover
+./chaos/runbook.sh recover all
+```
+
+---
+
 # 📡 Available API Endpoints
 
 ## Health
@@ -444,9 +528,123 @@ Runs `opensre doctor` and returns the diagnostic output.
 
 ---
 
+## Aerospike
+
+```
+GET /api/aerospike/health
+```
+
+Checks Aerospike connectivity.
+
+```
+GET /api/aerospike/query?namespace=test&set=users&key=1
+```
+
+Fetches a record by key.
+
+```
+POST /api/aerospike/write
+```
+
+Writes a record.
+
+```
+POST /api/aerospike/scan
+```
+
+Scans all records in a set.
+
+```
+POST /api/aerospike/delete
+```
+
+Deletes a record.
+
+---
+
+## YugabyteDB
+
+```
+GET /api/yugabyte/health
+```
+
+Checks YugabyteDB connectivity.
+
+```
+POST /api/yugabyte/query
+```
+
+Runs a read SQL query.
+
+```
+POST /api/yugabyte/execute
+```
+
+Runs any SQL statement.
+
+```
+POST /api/yugabyte/insert
+```
+
+Inserts a row and returns it.
+
+```
+POST /api/yugabyte/update
+```
+
+Updates rows matching a `where` clause.
+
+```
+POST /api/yugabyte/delete
+```
+
+Deletes rows matching a `where` clause.
+
+---
+
+## GitHub
+
+```
+GET /api/github/health
+```
+
+Checks GitHub connectivity and returns the connected repository.
+
+```
+GET /api/github/branches
+```
+
+Lists all repository branches.
+
+```
+GET /api/github/commits?sha=main&limit=50
+```
+
+Lists commits, optionally filtered by branch/SHA and date range (`since`, `until`).
+
+```
+GET /api/github/workflows?limit=20
+```
+
+Lists recent GitHub Actions workflow runs.
+
+```
+GET /api/github/issues?state=open&limit=30
+```
+
+Lists repository issues, filtered by state.
+
+```
+GET /api/github/repo
+```
+
+Returns repository metadata (stars, forks, description, visibility).
+
+---
+
 # 🖥 Dashboard Overview
 
-The React dashboard consists of five pages:
+The React dashboard consists of the following pages:
 
 ### 📊 Dashboard
 
@@ -471,6 +669,21 @@ The React dashboard consists of five pages:
 
 - VictoriaMetrics health status
 - Grafana integration
+- Live embedded Grafana dashboard (Catalog API Overview) with real-time panels
+
+---
+
+### 🗄 Aerospike
+
+- Connection status
+- Record browser (query / scan / write / delete)
+
+---
+
+### 🗄 YugabyteDB
+
+- Connection status
+- SQL console (query / execute / insert / update / delete)
 
 ---
 
@@ -479,6 +692,16 @@ The React dashboard consists of five pages:
 - OpenSRE Version
 - OpenSRE Doctor Output
 - Backend integration status
+
+---
+
+### 🔗 GitHub
+
+- Repository overview
+- Branch selector
+- Commit history
+- GitHub Actions workflow runs
+- Issues feed
 
 ---
 
@@ -719,6 +942,9 @@ Screenshots of the application will be added after the dashboard UI is finalized
 - ✔ Grafana
 - ✔ Kubernetes REST APIs
 - ✔ OpenSRE CLI Integration
+- ✔ Aerospike Connector
+- ✔ YugabyteDB Connector
+- ✔ GitHub Integration
 
 ---
 

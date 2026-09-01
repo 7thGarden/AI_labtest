@@ -12,6 +12,7 @@ import {
   HardDrive,
   GitBranch,
   Plug,
+  Zap,
 } from "lucide-react";
 
 const NAV = [
@@ -40,6 +41,10 @@ const NAV = [
   {
     section: "Integrations",
     items: [{ to: "/github", label: "GitHub", icon: GitBranch }],
+  },
+  {
+    section: "Chaos",
+    items: [{ to: "/chaos", label: "Failure Injection", icon: Zap }],
   },
   {
     section: "System",

@@ -194,3 +194,58 @@ def get_pod_endpoint(
     )
 
     return run_command(command)
+
+
+def get_first_pod_by_label(
+    namespace: str,
+    label_selector: str,
+    context: str | None = None,
+):
+    command = [
+        "kubectl",
+    ]
+
+    if context:
+        command.extend(["--context", context])
+
+    command.extend(
+        [
+            "get",
+            "pods",
+            "-n",
+            namespace,
+            "-l",
+            label_selector,
+            "-o",
+            "jsonpath={.items[0].metadata.name}",
+        ]
+    )
+
+    return run_command(command)
+
+
+def get_pod_logs(
+    namespace: str,
+    pod_name: str,
+    tail: int = 80,
+    context: str | None = None,
+):
+    command = [
+        "kubectl",
+    ]
+
+    if context:
+        command.extend(["--context", context])
+
+    command.extend(
+        [
+            "logs",
+            pod_name,
+            "-n",
+            namespace,
+            "--tail",
+            str(tail),
+        ]
+    )
+
+    return run_command(command)

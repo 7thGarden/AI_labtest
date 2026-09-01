@@ -5,12 +5,23 @@ from app.utils.command import run_command
 
 
 def version():
-    return run_command(
+    result = run_command(
         [
             settings.OPENSRE_BINARY,
             "--version",
         ]
     )
+
+    if not result.get("success") and "No such file or directory" in result.get(
+        "stderr", ""
+    ):
+        return {
+            "success": False,
+            "installed": False,
+            "error": "OpenSRE CLI is not installed",
+        }
+
+    return result
 
 
 def doctor():

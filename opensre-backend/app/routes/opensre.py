@@ -14,6 +14,7 @@ class ChatRequest(BaseModel):
     cluster: str | None = None
     namespace: str | None = None
     pod: str | None = None
+    target_type: str | None = None
 
 
 router = APIRouter(
@@ -62,8 +63,57 @@ def investigate_pod(
     )
 
 
+@router.get("/investigate/target/{target_type}")
+def investigate_target(
+    target_type: str,
+):
+    evidence_result = investigation.collect_target_evidence(target_type)
+
+    if not evidence_result.get("success"):
+        return evidence_result
+
+    return opensre_cli.investigate(
+        evidence_result["evidence"]
+    )
+
+
+@router.get("/investigate/stack")
+def investigate_stack(
+    context: str | None = None,
+):
+    evidence_result = investigation.collect_stack_evidence(context)
+
+    if not evidence_result.get("success"):
+        return evidence_result
+
+    return opensre_cli.investigate(
+        evidence_result["evidence"]
+    )
+
+
 @router.post("/chat")
 def chat(request: ChatRequest):
+    # Host service target (Aerospike / YugabyteDB) selected in the UI.
+    if request.target_type:
+        if request.target_type == investigation.STACK_TARGET:
+            evidence_result = investigation.collect_stack_evidence(
+                request.cluster
+            )
+        else:
+            evidence_result = investigation.collect_target_evidence(
+                request.target_type
+            )
+
+        if not evidence_result.get("success"):
+            return evidence_result
+
+        evidence = evidence_result["evidence"]
+
+        # Add the user's actual question to the evidence.
+        evidence["question"] = request.message
+
+        return opensre_cli.investigate(evidence)
+
     # If a pod is selected, collect real Kubernetes evidence
     # from the selected cluster before sending the request to OpenSRE.
     if request.namespace and request.pod:

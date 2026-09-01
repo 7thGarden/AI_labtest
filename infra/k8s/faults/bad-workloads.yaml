@@ -1,0 +1,111 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: memory-hog
+  namespace: opensre
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: memory-hog
+
+  template:
+    metadata:
+      labels:
+        app: memory-hog
+
+    spec:
+      containers:
+        - name: memory-hog
+          image: localhost/oom-hog:v1
+          imagePullPolicy: IfNotPresent
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 96Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: crashloop
+  namespace: opensre
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: crashloop
+
+  template:
+    metadata:
+      labels:
+        app: crashloop
+
+    spec:
+      containers:
+        - name: crashloop
+          image: localhost/flaky-service:v1
+          imagePullPolicy: IfNotPresent
+
+          command:
+            - python
+            - -c
+            - "import sys, time; time.sleep(2); sys.exit(1)"
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: imagepull
+  namespace: opensre
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: imagepull
+
+  template:
+    metadata:
+      labels:
+        app: imagepull
+
+    spec:
+      containers:
+        - name: imagepull
+          image: localhost/no-such-image:v9
+          imagePullPolicy: IfNotPresent
+---
+apiVersion: v1
+kind: Pod
+
+metadata:
+  name: pending-pod
+  namespace: opensre
+
+spec:
+  containers:
+    - name: pending-pod
+      image: docker.io/curlimages/curl:8.9.1
+      imagePullPolicy: IfNotPresent
+
+      resources:
+        requests:
+          cpu: "100"
+
+  restartPolicy: Never

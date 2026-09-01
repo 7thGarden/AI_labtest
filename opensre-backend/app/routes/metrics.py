@@ -26,3 +26,13 @@ def raw_metrics():
 @router.get("/query")
 def query_metrics(query: str = Query(...)):
     return victoriametrics.query(query)
+
+
+@router.get("/labels/{label}")
+def metric_label_values(label: str):
+    return victoriametrics.label_values(label)
+
+
+@router.get("/targets")
+def metrics_targets():
+    return victoriametrics.targets()
