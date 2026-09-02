@@ -2,8 +2,9 @@ admin:
   password: admin123
 
 service:
-  type: ClusterIP
+  type: NodePort
   port: 80
+  nodePort: 30300
 
 grafana.ini:
   server:
@@ -113,7 +114,7 @@ dashboards:
               "title": "Up Targets",
               "gridPos": {
                 "h": 4,
-                "w": 4,
+                "w": 3,
                 "x": 0,
                 "y": 0
               },
@@ -159,8 +160,8 @@ dashboards:
               "title": "Total Requests",
               "gridPos": {
                 "h": 4,
-                "w": 4,
-                "x": 4,
+                "w": 3,
+                "x": 3,
                 "y": 0
               },
               "targets": [
@@ -185,8 +186,8 @@ dashboards:
               "title": "Request Rate (req/s)",
               "gridPos": {
                 "h": 4,
-                "w": 4,
-                "x": 8,
+                "w": 3,
+                "x": 6,
                 "y": 0
               },
               "targets": [
@@ -216,8 +217,8 @@ dashboards:
               "title": "Error Rate (5xx/s)",
               "gridPos": {
                 "h": 4,
-                "w": 4,
-                "x": 12,
+                "w": 3,
+                "x": 9,
                 "y": 0
               },
               "targets": [
@@ -267,8 +268,8 @@ dashboards:
               "title": "Avg Response Size (bytes)",
               "gridPos": {
                 "h": 4,
-                "w": 4,
-                "x": 16,
+                "w": 3,
+                "x": 12,
                 "y": 0
               },
               "targets": [
@@ -298,8 +299,8 @@ dashboards:
               "title": "Process Memory (RSS)",
               "gridPos": {
                 "h": 4,
-                "w": 4,
-                "x": 20,
+                "w": 3,
+                "x": 15,
                 "y": 0
               },
               "targets": [
@@ -312,6 +313,108 @@ dashboards:
               "fieldConfig": {
                 "defaults": {
                   "unit": "bytes"
+                }
+              },
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "values": false
+                }
+              }
+            },
+            {
+              "id": 14,
+              "type": "stat",
+              "title": "P50 Latency",
+              "gridPos": {
+                "h": 4,
+                "w": 3,
+                "x": 18,
+                "y": 0
+              },
+              "targets": [
+                {
+                  "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_highr_seconds_bucket{instance=~\"$instance\",pod=~\"$pod\"}[$__rate_interval])))",
+                  "legendFormat": "p50",
+                  "refId": "A"
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "s",
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": 0
+                      },
+                      {
+                        "color": "yellow",
+                        "value": 1
+                      },
+                      {
+                        "color": "red",
+                        "value": 5
+                      }
+                    ]
+                  }
+                }
+              },
+              "options": {
+                "reduceOptions": {
+                  "calcs": [
+                    "lastNotNull"
+                  ],
+                  "values": false
+                }
+              }
+            },
+            {
+              "id": 15,
+              "type": "stat",
+              "title": "P99 Latency",
+              "gridPos": {
+                "h": 4,
+                "w": 3,
+                "x": 21,
+                "y": 0
+              },
+              "targets": [
+                {
+                  "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_highr_seconds_bucket{instance=~\"$instance\",pod=~\"$pod\"}[$__rate_interval])))",
+                  "legendFormat": "p99",
+                  "refId": "A"
+                }
+              ],
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "s",
+                  "color": {
+                    "mode": "thresholds"
+                  },
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "color": "green",
+                        "value": 0
+                      },
+                      {
+                        "color": "yellow",
+                        "value": 1
+                      },
+                      {
+                        "color": "red",
+                        "value": 5
+                      }
+                    ]
+                  }
                 }
               },
               "options": {
@@ -418,7 +521,7 @@ dashboards:
             {
               "id": 11,
               "type": "timeseries",
-              "title": "Request Latency (p95)",
+              "title": "Request Latency (p50 / p95 / p99)",
               "gridPos": {
                 "h": 8,
                 "w": 24,
@@ -427,9 +530,19 @@ dashboards:
               },
               "targets": [
                 {
-                  "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{instance=~\"$instance\",pod=~\"$pod\"}[$__rate_interval])))",
-                  "legendFormat": "p95",
+                  "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_highr_seconds_bucket{instance=~\"$instance\",pod=~\"$pod\"}[$__rate_interval])))",
+                  "legendFormat": "p50",
                   "refId": "A"
+                },
+                {
+                  "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_highr_seconds_bucket{instance=~\"$instance\",pod=~\"$pod\"}[$__rate_interval])))",
+                  "legendFormat": "p95",
+                  "refId": "B"
+                },
+                {
+                  "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_highr_seconds_bucket{instance=~\"$instance\",pod=~\"$pod\"}[$__rate_interval])))",
+                  "legendFormat": "p99",
+                  "refId": "C"
                 }
               ],
               "fieldConfig": {
@@ -473,7 +586,7 @@ dashboards:
               },
               "targets": [
                 {
-                  "expr": "sum by (pod, instance) (rate(python_gc_objects_collected{instance=~\"$instance\",pod=~\"$pod\"}[$__rate_interval]))",
+                  "expr": "sum by (pod, instance) (rate(python_gc_objects_collected_total{instance=~\"$instance\",pod=~\"$pod\"}[$__rate_interval]))",
                   "legendFormat": "{{pod}} {{instance}}",
                   "refId": "A"
                 }

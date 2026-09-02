@@ -22,14 +22,20 @@ INJECT_ACTIONS = {
     "pod-delete": "pod-delete",
     "pod-cpu": "pod-cpu",
     "pod-memory": "pod-memory",
+    "pod-latency": "pod-latency",
+    "flaky-latency": "flaky-latency",
     "system-pod-kill": "system-pod-kill",
     "node-cordon": "node-cordon",
     "node-drain": "node-drain",
+    "node-network-latency": "node-network-latency",
 }
 
 RECOVER_ACTIONS = {
     "aerospike-up": "aerospike-up",
     "yugabyte-up": "yugabyte-up",
+    "latency-off": "latency-off",
+    "flaky-latency-off": "flaky-latency-off",
+    "network-latency-off": "network-latency-off",
     "uncordon": "uncordon",
     "all": "all",
 }
@@ -39,6 +45,11 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 class ActionRequest(BaseModel):
     action: str
+
+
+class GameDayRequest(BaseModel):
+    action: str
+    duration_s: int = 30
 
 
 def _strip_ansi(text):
@@ -123,6 +134,22 @@ def actions():
     }
 
 
+@router.get("/history")
+def history(limit: int = 200):
+    """Newest-first experiment timeline from chaos/experiments/events.jsonl."""
+    from app.services import game_day
+
+    return game_day.history(limit=min(limit, 500))
+
+
+@router.get("/active")
+def active_faults():
+    """Currently-active faults tracked in chaos/experiments/active.json."""
+    from app.services import game_day
+
+    return game_day.active()
+
+
 @router.get("/status")
 def status():
     runbook = _command(["bash", str(RUNBOOK), "status"])
@@ -193,3 +220,11 @@ def seed():
         "action": "seed",
         "stdout": result.get("stdout", ""),
     }
+
+
+@router.post("/game-day")
+def game_day(request: GameDayRequest):
+    """Run a full baseline -> inject -> measure -> recover -> report cycle."""
+    from app.services import game_day as game_day_service
+
+    return game_day_service.run_game_day(request.action, request.duration_s)

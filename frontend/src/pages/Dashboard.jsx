@@ -40,7 +40,9 @@ const TRAFFIC_QUERIES = {
   errps: 'sum(rate(http_requests_total{status="5xx"}[1m]))',
   errShare:
     'sum(rate(http_requests_total{status="5xx"}[1m])) / clamp_min(sum(rate(http_requests_total[1m])), 1e-3) * 100',
-  p95: "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[1m])) by (le))",
+  p50: "histogram_quantile(0.50, sum(rate(http_request_duration_highr_seconds_bucket[1m])) by (le))",
+  p95: "histogram_quantile(0.95, sum(rate(http_request_duration_highr_seconds_bucket[1m])) by (le))",
+  p99: "histogram_quantile(0.99, sum(rate(http_request_duration_highr_seconds_bucket[1m])) by (le))",
 };
 
 const STATUS_TONE = {
@@ -153,7 +155,9 @@ export default function Dashboard() {
     rps: null,
     errps: null,
     errShare: null,
+    p50: null,
     p95: null,
+    p99: null,
   });
   const [health, setHealth] = useState({
     backend: null,
@@ -527,9 +531,22 @@ export default function Dashboard() {
                 icon={Gauge}
               />
               <TrafficTile
+                label="p50 latency"
+                sub="request duration"
+                value={formatLatency(traffic.p50)}
+                icon={Rocket}
+              />
+              <TrafficTile
                 label="p95 latency"
                 sub="request duration"
                 value={formatLatency(traffic.p95)}
+                icon={Rocket}
+              />
+              <TrafficTile
+                label="p99 latency"
+                sub="request duration"
+                value={formatLatency(traffic.p99)}
+                tone={traffic.p99 > 1 ? "danger" : "success"}
                 icon={Rocket}
               />
             </div>

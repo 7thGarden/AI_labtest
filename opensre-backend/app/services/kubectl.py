@@ -1,3 +1,5 @@
+import json
+
 from app.utils.command import run_command
 
 
@@ -228,6 +230,7 @@ def get_pod_logs(
     namespace: str,
     pod_name: str,
     tail: int = 80,
+    previous: bool = False,
     context: str | None = None,
 ):
     command = [
@@ -236,6 +239,9 @@ def get_pod_logs(
 
     if context:
         command.extend(["--context", context])
+
+    if previous:
+        command.append("--previous")
 
     command.extend(
         [
@@ -249,3 +255,106 @@ def get_pod_logs(
     )
 
     return run_command(command)
+
+
+def get_pod_state(
+    namespace: str,
+    pod_name: str,
+    context: str | None = None,
+):
+    """
+    Structured pod state: phase, node, IP, and per-container status with
+    current + last-terminated reasons and exit codes (e.g. OOMKilled,
+    CrashLoopBackOff, ImagePullBackOff).
+    """
+    command = [
+        "kubectl",
+    ]
+
+    if context:
+        command.extend(["--context", context])
+
+    command.extend(
+        [
+            "get",
+            "pod",
+            pod_name,
+            "-n",
+            namespace,
+            "-o",
+            "json",
+        ]
+    )
+
+    result = run_command(command)
+
+    if not result.get("success"):
+        return result
+
+    try:
+        pod = json.loads(result.get("stdout", "{}"))
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "stderr": "unable to parse pod json",
+        }
+
+    def _state(state):
+        if not state:
+            return None
+
+        if "waiting" in state:
+            inner = state["waiting"]
+            return {
+                "kind": "waiting",
+                "reason": inner.get("reason"),
+                "message": (inner.get("message") or "")[:500],
+                "exit_code": None,
+                "started_at": None,
+            }
+
+        if "running" in state:
+            inner = state["running"]
+            return {
+                "kind": "running",
+                "reason": None,
+                "message": None,
+                "exit_code": None,
+                "started_at": inner.get("startedAt"),
+            }
+
+        if "terminated" in state:
+            inner = state["terminated"]
+            return {
+                "kind": "terminated",
+                "reason": inner.get("reason"),
+                "message": (inner.get("message") or "")[:500],
+                "exit_code": inner.get("exitCode"),
+                "started_at": inner.get("startedAt"),
+            }
+
+        return None
+
+    containers = []
+
+    for status in pod.get("status", {}).get("containerStatuses", []) or []:
+        containers.append(
+            {
+                "name": status.get("name"),
+                "ready": status.get("ready"),
+                "restart_count": status.get("restartCount"),
+                "image": status.get("image"),
+                "state": _state(status.get("state")),
+                "last_state": _state(status.get("lastState")),
+            }
+        )
+
+    return {
+        "success": True,
+        "state": {
+            "phase": pod.get("status", {}).get("phase"),
+            "node": pod.get("spec", {}).get("nodeName"),
+            "pod_ip": pod.get("status", {}).get("podIP"),
+            "containers": containers,
+        },
+    }

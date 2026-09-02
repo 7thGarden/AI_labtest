@@ -16,6 +16,10 @@ spec:
     metadata:
       labels:
         app: traffic-gen
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
 
     spec:
       containers:
@@ -34,6 +38,9 @@ spec:
                 curl -s -o /dev/null $CATALOG/products
                 curl -s -o /dev/null $CATALOG/products
                 curl -s -o /dev/null $CATALOG/health
+                # probe sidecar in-pod traffic (generates probe latency samples)
+                curl -s -o /dev/null http://localhost:8000/probe
+                curl -s -o /dev/null http://localhost:8000/probe
                 # order service traffic (mix of 200/500)
                 curl -s -o /dev/null $FLAKY/orders
                 curl -s -o /dev/null $FLAKY/orders
@@ -52,4 +59,27 @@ spec:
               memory: 64Mi
             limits:
               cpu: 300m
+              memory: 128Mi
+
+        - name: probe
+          image: localhost/probe:v1
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: metrics
+              containerPort: 8000
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 2
+            periodSeconds: 5
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
               memory: 128Mi

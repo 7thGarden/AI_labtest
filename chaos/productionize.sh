@@ -18,6 +18,7 @@ CLUSTER="opensre-demo"
 
 FLAKY_IMAGE="localhost/flaky-service:v1"
 OOM_IMAGE="localhost/oom-hog:v1"
+PROBE_IMAGE="localhost/probe:v1"
 
 fault_manifests() {
     ls "$FAULTS_DIR"/*.yaml
@@ -27,9 +28,11 @@ build_images() {
     echo ">> building images"
     podman build -t "$FLAKY_IMAGE" -f "$ROOT_DIR/fault-apps/flaky-service/Containerfile" "$ROOT_DIR/fault-apps/flaky-service"
     podman build -t "$OOM_IMAGE" -f "$ROOT_DIR/fault-apps/oom-hog/Containerfile" "$ROOT_DIR/fault-apps/oom-hog"
+    podman build -t "$PROBE_IMAGE" -f "$ROOT_DIR/fault-apps/probe/Containerfile" "$ROOT_DIR/fault-apps/probe"
     echo ">> loading images into kind ($CLUSTER)"
     kind load docker-image "$FLAKY_IMAGE" --name "$CLUSTER"
     kind load docker-image "$OOM_IMAGE" --name "$CLUSTER"
+    kind load docker-image "$PROBE_IMAGE" --name "$CLUSTER"
 }
 
 apply_workloads() {

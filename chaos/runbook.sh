@@ -14,20 +14,30 @@
 #  -----------------
 #    aerospike-down          Stop the Aerospike container (health & queries fail)
 #    yugabyte-down           Stop the YugabyteDB container (SQL fails)
-#    pod-crash               Force the catalog-api pod to crash-loop / restart
+#    pod-crash               Crash the catalog-api container (real crash -> restart)
 #    pod-delete              Delete the catalog-api pod (K8s reschedules -> restart)
 #    pod-cpu                 Inject a CPU spike into the catalog-api pod
 #    pod-memory              Inject a memory spike into the catalog-api pod
+#    pod-latency             Add +5s extra latency to ALL catalog-api traffic
+#    flaky-latency           Add latency to flaky-service /orders + /slow traffic
 #    system-pod-kill         Kill a kube-system pod (e.g. coredns) -> self-healing
 #    node-cordon             Cordon the worker node (no new pods scheduled)
 #    node-drain              Drain the worker node (evicts pods)
+#    node-network-latency    Add netem latency to the whole worker node egress
 #
 #  RECOVERY (restore)
 #  ------------------
-#    ./chaos/runbook.sh recover aerospike-up    Start Aerospike again
-#    ./chaos/runbook.sh recover yugabyte-up     Start Yugabyte again
-#    ./chaos/runbook.sh recover uncordon        Uncordon the worker node
-#    ./chaos/runbook.sh recover all             Restore everything
+#    ./chaos/runbook.sh recover aerospike-up        Start Aerospike again
+#    ./chaos/runbook.sh recover yugabyte-up         Start Yugabyte again
+#    ./chaos/runbook.sh recover latency-off         Clear the injected catalog-api latency
+#    ./chaos/runbook.sh recover flaky-latency-off   Clear the injected flaky-service latency
+#    ./chaos/runbook.sh recover network-latency-off Remove the worker-node netem delay
+#    ./chaos/runbook.sh recover uncordon            Uncordon the worker node
+#    ./chaos/runbook.sh recover all                 Restore everything
+#
+#  Every inject / recover is recorded to chaos/experiments/events.jsonl (an
+#  experiment ID + timestamp), and currently-active faults are tracked in
+#  chaos/experiments/active.json for the Chaos dashboard.
 #
 # =============================================================================
 
@@ -38,7 +48,12 @@ CLUSTER="${CLUSTER:-kind-opensre-demo}"
 CATALOG_DEPLOY="catalog-api"
 CATALOG_NS="opensre"
 WORKER_NODE="${WORKER_NODE:-opensre-demo-worker}"
+NODE_CONTAINER="${NODE_CONTAINER:-opensre-demo-worker}"
+NODE_LATENCY_MS="${NODE_LATENCY_MS:-500}"
 SYSTEM_POD_PATTERN="${SYSTEM_POD_PATTERN:-coredns}"
+
+RUNBOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXPERIMENTS_DIR="${RUNBOOK_DIR}/experiments"
 
 # ---------- Pretty printing ------------------------------------------------
 BOLD="\033[1m"
@@ -90,6 +105,90 @@ preflight() {
 
 # ---------- Container helpers ----------------------------------------------
 
+# ---------- Experiment registry -------------------------------------------
+# Every inject / recover is recorded to chaos/experiments/events.jsonl and
+# currently-active faults to chaos/experiments/active.json (both flock-guarded).
+
+exp_id() {
+  printf 'exp-%s-%04d' "$(date +%Y%m%d%H%M%S)" "$(( RANDOM % 10000 ))"
+}
+
+exp_record() {
+  # exp_record <kind> <fault> <target> <params> [note]
+  local kind="$1" fault="$2" target="${3:-}" params="${4:-}" note="${5:-}"
+  mkdir -p "${EXPERIMENTS_DIR}"
+  local id ts
+  id="$(exp_id)"
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  {
+    flock 9
+    python3 -c '
+import json, sys
+id, kind, fault, target, params, note, ts = sys.argv[1:8]
+print(json.dumps({"id": id, "kind": kind, "fault": fault, "target": target,
+                  "params": params, "note": note, "ts": ts}))
+' "$id" "$kind" "$fault" "$target" "$params" "$note" "$ts" \
+      >> "${EXPERIMENTS_DIR}/events.jsonl"
+  } 9>"${EXPERIMENTS_DIR}/.lock"
+  printf '%s' "$id"
+}
+
+exp_active_add() {
+  # exp_active_add <fault> <id> <params>
+  local fault="$1" id="$2" params="${3:-}"
+  mkdir -p "${EXPERIMENTS_DIR}"
+  local ts
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  {
+    flock 9
+    python3 -c '
+import json, sys
+fault, id, params, ts, path = sys.argv[1:6]
+try:
+    data = json.load(open(path))
+except Exception:
+    data = {}
+data[fault] = {"id": id, "params": params, "started": ts}
+json.dump(data, open(path, "w"), indent=2)
+' "$fault" "$id" "$params" "$ts" "${EXPERIMENTS_DIR}/active.json"
+  } 9>"${EXPERIMENTS_DIR}/.lock"
+}
+
+exp_active_remove() {
+  # exp_active_remove <fault>
+  local fault="$1"
+  {
+    flock 9
+    if [[ -f "${EXPERIMENTS_DIR}/active.json" ]]; then
+      python3 -c '
+import json, sys
+fault, path = sys.argv[1:3]
+try:
+    data = json.load(open(path))
+except Exception:
+    data = {}
+data.pop(fault, None)
+json.dump(data, open(path, "w"), indent=2)
+' "$fault" "${EXPERIMENTS_DIR}/active.json"
+    fi
+  } 9>"${EXPERIMENTS_DIR}/.lock"
+}
+
+exp_active_show() {
+  if [[ -f "${EXPERIMENTS_DIR}/active.json" ]] \
+    && python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if d else 1)' \
+      "${EXPERIMENTS_DIR}/active.json" 2>/dev/null; then
+    echo "--- Active faults (chaos/experiments/active.json) ---"
+    python3 -c '
+import json, sys
+data = json.load(open(sys.argv[1]))
+for fault, info in sorted(data.items()):
+    print("  * {}  (id={}, started={})".format(fault, info.get("id"), info.get("started")))
+' "${EXPERIMENTS_DIR}/active.json"
+    echo
+  fi
+}
+
 # ---------- Failure: Aerospike down ----------------------------------------
 aerospike_down() {
   banner "Injecting failure: AEROSPIKE DOWN"
@@ -97,6 +196,9 @@ aerospike_down() {
   if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^aerospike$'; then
     docker stop aerospike
     ok "Aerospike container stopped"
+    local id
+    id="$(exp_record inject aerospike-down aerospike "" "container stopped")"
+    exp_active_add aerospike-down "${id}" "container stopped"
   else
     warn "No 'aerospike' container found — nothing to do"
   fi
@@ -114,6 +216,9 @@ yugabyte_down() {
   if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^yugabyte$'; then
     docker stop yugabyte
     ok "YugabyteDB container stopped"
+    local id
+    id="$(exp_record inject yugabyte-down yugabyte "" "container stopped")"
+    exp_active_add yugabyte-down "${id}" "container stopped"
   else
     warn "No 'yugabyte' container found — nothing to do"
   fi
@@ -126,20 +231,25 @@ yugabyte_down() {
 
 # ---------- Failure: Pod crash-loop ----------------------------------------
 pod_crash() {
-  banner "Injecting failure: CATALOG-API POD CRASH-LOOP"
-  step "Scaling deployment to 0 then back up to force a crash"
-  kubectl --context "${CLUSTER}" scale deploy "${CATALOG_DEPLOY}" -n "${CATALOG_NS}" --replicas=0
-  ok "Scaled catalog-api to 0"
-  sleep 2
-  kubectl --context "${CLUSTER}" scale deploy "${CATALOG_DEPLOY}" -n "${CATALOG_NS}" --replicas=1
-  ok "Scaled catalog-api back to 1"
+  banner "Injecting failure: CATALOG-API POD CRASH"
+  local pod
+  pod=$(kubectl --context "${CLUSTER}" get pod -n "${CATALOG_NS}" -l app=catalog-api \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [[ -z "${pod}" ]]; then
+    warn "No catalog-api pod found — cannot crash it"
+    return
+  fi
+  step "Calling /failure/crash on pod '${pod}' (the container exits 1)"
+  # os._exit(1) kills the process mid-request, so the exec connection drops —
+  # that is the expected, harmless failure.
+  kubectl --context "${CLUSTER}" exec -n "${CATALOG_NS}" "${pod}" -- \
+    python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/failure/crash', timeout=10)" \
+    >/dev/null 2>&1 || true
+  ok "Crash requested — kubelet will restart the container"
+  exp_record inject pod-crash "catalog-api" "" "container exited 1"
   echo
-  echo "  >>> The pod is being recreated. To observe a CRASH (restart count climbing),"
-  echo "      call the injected crash endpoint:"
-  echo
-  echo "          curl -s <service-url>/failure/crash"
-  echo
-  echo "  >>> Watch the Kubernetes page: the pod RESTARTS column will increase."
+  echo "  >>> Watch the Kubernetes page: the pod RESTARTS column will climb,"
+  echo "      and events will show the container exited with code 1."
 }
 
 # ---------- Failure: Pod delete (reschedule) -------------------------------
@@ -154,6 +264,7 @@ pod_delete() {
   fi
   kubectl --context "${CLUSTER}" delete pod "${pod}" -n "${CATALOG_NS}" --wait=false
   ok "Deleted pod '${pod}'"
+  exp_record inject pod-delete "${pod}" "" "pod deleted, K8s reschedules"
   echo
   echo "  >>> Kubernetes will immediately recreate it. This is a good one to show"
   echo "      'self-healing' + the pod restart count / events in OpenSRE."
@@ -171,6 +282,7 @@ pod_cpu() {
   fi
   ok "Hitting http://${ep}:8000/failure/cpu (~20s busy loop)"
   curl -s --max-time 30 "http://${ep}:8000/failure/cpu" || true
+  exp_record inject pod-cpu "catalog-api" "cpu spike (20s)"
   echo
   echo "  >>> CPU metric should spike in Grafana / VictoriaMetrics."
 }
@@ -187,8 +299,130 @@ pod_memory() {
   fi
   ok "Hitting http://${ep}:8000/failure/memory"
   curl -s --max-time 30 "http://${ep}:8000/failure/memory" || true
+  exp_record inject pod-memory "catalog-api" "memory spike (~300 MB)"
   echo
   echo "  >>> Resident memory metric should climb. Watch for an OOM/terminate".
+}
+
+# ---------- Failure: Pod latency spike -------------------------------------
+latency_control() {
+  # $1 = query string, e.g. "ms=5000" or "ms=0"
+  local ep
+  ep=$(kubectl --context "${CLUSTER}" get pod -n "${CATALOG_NS}" -l app=catalog-api \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [[ -z "${ep}" ]]; then
+    warn "No catalog-api pod found — cannot control latency"
+    return 1
+  fi
+  step "Calling /failure/latency?${1} on pod '${ep}'"
+  local out
+  out=$(kubectl --context "${CLUSTER}" exec -n "${CATALOG_NS}" "${ep}" -- \
+    python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/failure/latency?${1}', timeout=10).read().decode())" 2>/dev/null || true)
+  if [[ -z "${out}" ]]; then
+    warn "Could not reach /failure/latency"
+    note "Rebuild + reload the catalog-api image for this action to work:"
+    note "  docker build -f catalog-api/Containerfile -t localhost/catalog-api:v1 catalog-api"
+    note "  kind load docker-image localhost/catalog-api:v1 --name opensre-demo"
+    note "  kubectl -n opensre rollout restart deploy/catalog-api"
+    return 1
+  fi
+  ok "${out}"
+}
+
+pod_latency() {
+  banner "Injecting failure: CATALOG-API LATENCY SPIKE"
+  local ms="${POD_LATENCY_MS:-5000}"
+  step "Adding ${ms}ms extra latency to all catalog-api traffic"
+  latency_control "ms=${ms}"
+  local id
+  id="$(exp_record inject pod-latency "catalog-api" "ms=${ms}" "persistent delay")"
+  exp_active_add pod-latency "${id}" "ms=${ms}"
+  echo
+  echo "  >>> Traffic-gen hits catalog-api /products constantly, so the Latency"
+  echo "      page should show catalog-api p50/p95/p99 climbing toward ${ms}ms,"
+  echo "      and the per-pod cards will flag it as HIGH."
+  echo
+  echo "  >>> Then run './chaos/runbook.sh recover latency-off' to clear it."
+}
+
+latency_off() {
+  banner "Recovery: CLEAR CATALOG-API LATENCY"
+  latency_control "ms=0"
+  echo
+  echo "  >>> catalog-api latency injection cleared — percentile charts should"
+  echo "      drop back to the healthy baseline on the next refresh."
+}
+
+# ---------- Failure: Flaky-service latency spike ---------------------------
+flaky_latency_control() {
+  # $1 = query string, e.g. "ms=3000" or "ms=0"
+  local ep
+  ep=$(kubectl --context "${CLUSTER}" get pod -n "${CATALOG_NS}" -l app=flaky-service \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [[ -z "${ep}" ]]; then
+    warn "No flaky-service pod found — cannot control latency"
+    return 1
+  fi
+  step "Calling /latency?${1} on pod '${ep}'"
+  local out
+  out=$(kubectl --context "${CLUSTER}" exec -n "${CATALOG_NS}" "${ep}" -- \
+    python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/latency?${1}', timeout=10).read().decode())" 2>/dev/null || true)
+  if [[ -z "${out}" ]]; then
+    warn "Could not reach /latency on flaky-service"
+    note "Rebuild + reload the flaky-service image for this action to work:"
+    note "  podman build -f fault-apps/flaky-service/Containerfile -t localhost/flaky-service:v1 fault-apps/flaky-service"
+    note "  kind load docker-image localhost/flaky-service:v1 --name ${CLUSTER}"
+    note "  kubectl -n ${CATALOG_NS} rollout restart deploy/flaky-service"
+    return 1
+  fi
+  ok "${out}"
+}
+
+flaky_latency() {
+  banner "Injecting failure: FLAKY-SERVICE LATENCY SPIKE"
+  local ms="${FLAKY_LATENCY_MS:-3000}"
+  step "Adding ${ms}ms extra latency to all flaky-service traffic"
+  flaky_latency_control "ms=${ms}"
+  local id
+  id="$(exp_record inject flaky-latency "flaky-service" "ms=${ms}" "persistent delay")"
+  exp_active_add flaky-latency "${id}" "ms=${ms}"
+  echo
+  echo "  >>> traffic-gen keeps hitting /orders + /slow, so flaky-service"
+  echo "      p50/p95/p99 should climb toward ${ms}ms on the Latency page."
+  echo
+  echo "  >>> Then run './chaos/runbook.sh recover flaky-latency-off'."
+}
+
+flaky_latency_off() {
+  banner "Recovery: CLEAR FLAKY-SERVICE LATENCY"
+  flaky_latency_control "ms=0"
+  echo
+  echo "  >>> flaky-service latency injection cleared."
+}
+
+# ---------- Failure: Node network latency (tc netem) -----------------------
+node_network_latency() {
+  banner "Injecting failure: NODE NETWORK LATENCY (${NODE_CONTAINER})"
+  step "Adding ${NODE_LATENCY_MS}ms netem delay to '${NODE_CONTAINER}' eth0"
+  docker exec "${NODE_CONTAINER}" tc qdisc replace dev eth0 root netem delay "${NODE_LATENCY_MS}ms"
+  ok "netem delay ${NODE_LATENCY_MS}ms applied to node egress"
+  local id
+  id="$(exp_record inject node-network-latency "${NODE_CONTAINER}" "ms=${NODE_LATENCY_MS}" "tc netem on node egress")"
+  exp_active_add node-network-latency "${id}" "ms=${NODE_LATENCY_MS}"
+  echo
+  echo "  >>> ALL worker-node egress (catalog-api, flaky-service, traffic-gen)"
+  echo "      is now delayed — latency percentiles across the board should climb."
+  echo
+  echo "  >>> Recover with './chaos/runbook.sh recover network-latency-off'"
+}
+
+network_latency_off() {
+  banner "Recovery: REMOVE NODE NETEM DELAY (${NODE_CONTAINER})"
+  if docker exec "${NODE_CONTAINER}" tc qdisc del dev eth0 root 2>/dev/null; then
+    ok "netem delay removed"
+  else
+    warn "No netem qdisc present on ${NODE_CONTAINER}"
+  fi
 }
 
 # ---------- Failure: Kill a system pod (self-healing) ----------------------
@@ -203,6 +437,7 @@ system_pod_kill() {
   fi
   kubectl --context "${CLUSTER}" delete pod "${pod}" -n kube-system --wait=false
   ok "Deleted system pod '${pod}'"
+  exp_record inject system-pod-kill "${pod}" "" "kube-system pod deleted, kubelet recreates"
   echo
   echo "  >>> Kubelet will immediately recreate it. A great visual for cluster"
   echo "      self-healing — watch the pod come back in kubectl get pods -A."
@@ -214,6 +449,9 @@ node_cordon() {
   step "Marking worker node as unschedulable"
   kubectl --context "${CLUSTER}" cordon "${WORKER_NODE}"
   ok "Node '${WORKER_NODE}' cordoned (SchedulingDisabled)"
+  local id
+  id="$(exp_record inject node-cordon "${WORKER_NODE}" "" "node cordoned")"
+  exp_active_add node-cordon "${id}" ""
   echo
   echo "  >>> Show kubectl get nodes — the worker will show 'Ready,SchedulingDisabled'."
   echo "  >>> New pods will no longer schedule onto it."
@@ -228,35 +466,101 @@ node_drain() {
   kubectl --context "${CLUSTER}" drain "${WORKER_NODE}" \
     --ignore-daemonsets --delete-emptydir-data --force
   ok "Node drained"
+  local id
+  id="$(exp_record inject node-drain "${WORKER_NODE}" "" "node drained")"
+  exp_active_add node-cordon "${id}" "via node-drain"
   echo
   echo "  >>> Workload pods are evicted from the worker node."
   echo "  >>> Recover with './chaos/runbook.sh recover uncordon' (then re-start any evicted app pods)."
 }
 
 # ---------- Recovery -------------------------------------------------------
+container_up() {
+  docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null | grep -q '^true$'
+}
+
+node_ready() {
+  local state
+  state=$(kubectl --context "${CLUSTER}" get node "${WORKER_NODE}" --no-headers 2>/dev/null | awk '{print $2}' || true)
+  [[ "${state}" == "Ready" ]]
+}
+
 recover() {
   local target="${1:-all}"
   banner "RECOVERY: ${target}"
+  local id
 
   case "${target}" in
     aerospike-up)
       step "Starting Aerospike container"
-      docker start aerospike 2>/dev/null && ok "Aerospike started" || warn "Could not start Aerospike"
+      docker start aerospike >/dev/null 2>&1 || true
+      sleep 2
+      if container_up aerospike; then
+        ok "Aerospike running"
+        id="$(exp_record recover aerospike-up aerospike "" "container restarted")"
+        exp_active_remove aerospike-down
+      else
+        fail "Aerospike failed to start"; return 1
+      fi
       ;;
     yugabyte-up)
       step "Starting YugabyteDB container"
-      docker start yugabyte 2>/dev/null && ok "Yugabyte started" || warn "Could not start Yugabyte"
+      docker start yugabyte >/dev/null 2>&1 || true
+      sleep 2
+      if container_up yugabyte; then
+        ok "YugabyteDB running"
+        id="$(exp_record recover yugabyte-up yugabyte "" "container restarted")"
+        exp_active_remove yugabyte-down
+      else
+        fail "YugabyteDB failed to start"; return 1
+      fi
+      ;;
+    latency-off)
+      step "Clearing catalog-api extra latency"
+      if latency_control "ms=0"; then
+        ok "catalog-api latency cleared"
+        id="$(exp_record recover latency-off "catalog-api" "ms=0" "")"
+        exp_active_remove pod-latency
+      else
+        fail "Could not clear catalog-api latency"; return 1
+      fi
+      ;;
+    flaky-latency-off)
+      step "Clearing flaky-service extra latency"
+      if flaky_latency_control "ms=0"; then
+        ok "flaky-service latency cleared"
+        id="$(exp_record recover flaky-latency-off "flaky-service" "ms=0" "")"
+        exp_active_remove flaky-latency
+      else
+        fail "Could not clear flaky-service latency"; return 1
+      fi
+      ;;
+    network-latency-off)
+      step "Removing node netem delay"
+      network_latency_off
+      id="$(exp_record recover network-latency-off "${NODE_CONTAINER}" "" "")"
+      exp_active_remove node-network-latency
       ;;
     uncordon)
       step "Uncordoning worker node"
-      kubectl --context "${CLUSTER}" uncordon "${WORKER_NODE}" && ok "Node uncordoned" || warn "Uncordon failed"
+      kubectl --context "${CLUSTER}" uncordon "${WORKER_NODE}" >/dev/null 2>&1 || true
+      if node_ready; then
+        ok "Node '${WORKER_NODE}' Ready"
+        id="$(exp_record recover uncordon "${WORKER_NODE}" "" "node uncordoned")"
+        exp_active_remove node-cordon
+      else
+        fail "Node '${WORKER_NODE}' not Ready after uncordon"; return 1
+      fi
       ;;
     all)
-      step "Restoring all services"
-      docker start aerospike 2>/dev/null && ok "Aerospike started" || warn "No aerospike container"
-      docker start yugabyte 2>/dev/null && ok "Yugabyte started" || warn "No yugabyte container"
-      kubectl --context "${CLUSTER}" uncordon "${WORKER_NODE}" 2>/dev/null && ok "Node uncordoned" || warn "Uncordon failed"
-      kubectl --context "${CLUSTER}" rollout status deploy "${CATALOG_DEPLOY}" -n "${CATALOG_NS}" 2>/dev/null && ok "catalog-api running" || warn "catalog-api not scaling"
+      recover aerospike-up || true
+      recover yugabyte-up || true
+      recover latency-off || true
+      recover flaky-latency-off || true
+      recover network-latency-off || true
+      recover uncordon || true
+      kubectl --context "${CLUSTER}" rollout status deploy "${CATALOG_DEPLOY}" -n "${CATALOG_NS}" \
+        >/dev/null 2>&1 && ok "catalog-api running" || warn "catalog-api not scaling"
       ;;
     *)
       warn "Unknown recovery target '${target}'"
@@ -308,6 +612,9 @@ show_status() {
     Ready) ok "Worker node: Ready" ;;
     *) warn "Worker node: ${node_state:-unknown}" ;;
   esac
+
+  echo
+  exp_active_show
 }
 
 # ---------- Dispatch -------------------------------------------------------
@@ -323,9 +630,12 @@ main() {
     pod-delete)       preflight; pod_delete ;;
     pod-cpu)          preflight; pod_cpu ;;
     pod-memory)       preflight; pod_memory ;;
+    pod-latency)      preflight; pod_latency ;;
+    flaky-latency)    preflight; flaky_latency ;;
     system-pod-kill)  preflight; system_pod_kill ;;
     node-cordon)      preflight; node_cordon ;;
     node-drain)       preflight; node_drain ;;
+    node-network-latency) preflight; node_network_latency ;;
     status)           preflight; show_status ;;
     recover)          recover "${@:-all}" ;;
     help|--help|-h)   usage ;;

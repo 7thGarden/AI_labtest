@@ -5,6 +5,7 @@ import Layout from "./components/Layout";
 import Dashboard from "./pages/Dashboard";
 import Kubernetes from "./pages/Kubernetes";
 import Metrics from "./pages/Metrics";
+import Latency from "./pages/Latency";
 import Aerospike from "./pages/Aerospike";
 import Yugabyte from "./pages/Yugabyte";
 import AIAnalysis from "./pages/AIAnalysis";
@@ -20,6 +21,7 @@ function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/kubernetes" element={<Kubernetes />} />
         <Route path="/metrics" element={<Metrics />} />
+        <Route path="/latency" element={<Latency />} />
         <Route path="/aerospike" element={<Aerospike />} />
         <Route path="/yugabyte" element={<Yugabyte />} />
         <Route path="/analysis" element={<AIAnalysis />} />

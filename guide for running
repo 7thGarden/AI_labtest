@@ -10,6 +10,12 @@ kubectl get pods -A
 
 2. Grafana
 
+Grafana is exposed as a NodePort (30300) and mapped to localhost:3000 via
+infra/kind/kind-config.yaml (extraPortMappings). If the cluster was created
+with that file, open http://localhost:3000 directly (no port-forward needed).
+
+If you have an older cluster without the port mapping, use:
+
 kubectl port-forward -n observability svc/grafana 3000:80
 
 Open: http://localhost:3000
