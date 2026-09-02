@@ -3,6 +3,8 @@ import time
 
 from fastapi import APIRouter
 
+from app.core import latency
+
 router = APIRouter(tags=["Failure Simulator"])
 
 
@@ -48,4 +50,24 @@ def memory_leak():
     return {
         "status": "Memory allocated",
         "size_mb": len(data),
+    }
+
+
+@router.get("/failure/latency")
+def set_latency(ms: int = 0):
+    """Persistently add `ms` of extra latency to all catalog-api traffic
+    (everything except /failure, /metrics and /health). `ms=0` turns it off."""
+    delay = latency.set_delay_ms(ms)
+
+    return {
+        "status": "latency updated",
+        "delay_ms": delay,
+    }
+
+
+@router.get("/failure/latency/status")
+def latency_status():
+    return {
+        "status": "ok",
+        "delay_ms": latency.get_delay_ms(),
     }

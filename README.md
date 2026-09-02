@@ -35,6 +35,7 @@ The project demonstrates how modern observability tools can be integrated with A
 - Dashboard
 - Kubernetes Overview
 - Metrics Page
+- Latency Page (live p50/p95/p99, per-pod view, auto-refreshing)
 - AI Analysis
 - GitHub Integration
 - Aerospike Console
@@ -252,16 +253,47 @@ Create the namespace:
 kubectl create namespace observability
 ```
 
-## VictoriaMetrics
+## VictoriaMetrics (install script)
+
+All observability charts are installed idempotently via a single script with
+pinned versions:
 
 ```bash
-helm install victoriametrics vm/victoria-metrics-single \
-  -n observability
+./observability/install.sh
 ```
 
----
+This creates the **`observability`** namespace, installs the repo charts
+listed below, and applies the custom values files. To reinstall/upgrade,
+run it again — it uses `helm upgrade --install`.
 
-## Grafana
+| Chart | Pinned version | Values file |
+|---|---|---|
+| `vm/victoria-metrics-single` | `0.45.0` | `observability/vm-values.yaml` |
+| `vm/victoria-metrics-agent` | `0.46.0` | `observability/vmagent-values.yaml` |
+| `grafana/grafana` | `10.5.15` | `observability/grafana-values.yaml` |
+| `open-telemetry/opentelemetry-collector` | `0.172.0` | `observability/otel-values.yaml` |
+| `prometheus-community/kube-state-metrics` | `8.4.1` | (defaults) |
+| `prometheus-community/prometheus-node-exporter` | `4.56.3` | (defaults) |
+
+`vm-values.yaml` keeps the single-node VictoriaMetrics at **1-day
+retention** (`retentionPeriod: "1"`), a **16 Gi persistent volume**, and
+resource requests/limits tuned for the demo.
+
+`vmagent-values.yaml` scrapes four jobs: **kube-state-metrics** (pod
+status/restarts), **node** (machine CPU/RAM), **kubernetes-nodes-cadvisor**
+(container CPU/memory/file descriptors) and **kubernetes-pods** (the
+OpenTelemetry-injected `/metrics` endpoint on catalog-api, flaky-service, and
+the traffic-gen probe). The pod-scraper drops the bogus `:80` sidecar target
+(the `.+:\d+$` keep regex on `__address__`), and node/cadvisor relabels use a
+full-match RE2 (`([^:]+):.*`) so the `IP:10250` discovery label is correctly
+stripped.
+
+To install individually (without the script):
+
+```bash
+helm install victoriametrics vm/victoria-metrics-single -n observability -f observability/vm-values.yaml
+helm install vmagent vm/victoria-metrics-agent -n observability -f observability/vmagent-values.yaml
+```
 
 The Grafana chart is deployed with a VictoriaMetrics datasource and a pre-provisioned **"Catalog API Overview"** dashboard (viewable live inside the Metrics page):
 
@@ -271,7 +303,17 @@ helm install grafana grafana/grafana \
   -f observability/grafana-values.yaml
 ```
 
-The values file enables anonymous Viewer access and iframe embedding so the dashboard harts can be rendered live in the React frontend. Login with `admin` / `admin123` for full access.
+The values file exposes Grafana as a `NodePort` on **30300** and maps `localhost:3000` through
+kind (`infra/kind/kind-config.yaml`, `extraPortMappings`), so the embedded Metrics dashboard works
+without a manual port-forward after the cluster is created with the updated config. It also enables
+anonymous Viewer access and iframe embedding so the dashboard charts can be rendered live in the React
+frontend. Login with `admin` / `admin123` for full access.
+
+If you are running an older cluster (created before the port mapping), reach Grafana with:
+
+```bash
+kubectl port-forward -n observability svc/grafana 3000:80
+```
 
 ---
 
@@ -285,13 +327,24 @@ helm install otel-collector open-telemetry/opentelemetry-collector \
 
 ---
 
-## vmagent
+## vmagent (scrape pipeline)
 
-```bash
-helm install vmagent vm/victoria-metrics-agent \
-  -n observability \
-  -f observability/vmagent-values.yaml
-```
+Installed by the install script. The `vmagent-values.yaml` file configures
+the scrape jobs:
+
+- **kube-state-metrics** — pod status, restart counts, waiting reasons
+- **node** — `node_cpu_seconds_total`, `node_memory_MemAvailable_bytes`
+- **kubernetes-nodes-cadvisor** — `container_cpu_usage_seconds_total`,
+  `container_memory_working_set_bytes`, `container_file_descriptors`
+- **kubernetes-pods** — OpenTelemetry `/metrics` endpoint (keeps only
+  annotated targets matching `.+:\d+$` to drop the `:80` sidecar metric
+  noise from multi-container pods)
+
+Node discovery uses `role: node` (`IP:10250`); the relabel regex
+`([^:]+):.*` (full-match) strips the port before re-targeting
+`$1:9100` (node-exporter) or `$1:10250` (cAdvisor). No extra kubelet
+RBAC is needed — the `vmagent-victoria-metrics-agent` ClusterRole already
+has `GET/LIST/WATCH` on `nodes` and `nodes/metrics`.
 
 ---
 
@@ -447,18 +500,36 @@ full guide.
 ./chaos/runbook.sh status
 
 # Inject a failure
-./chaos/runbook.sh aerospike-down      # Aerospike container down
-./chaos/runbook.sh yugabyte-down       # YugabyteDB container down
-./chaos/runbook.sh pod-crash           # Force catalog-api crash/restart
-./chaos/runbook.sh pod-cpu             # CPU spike in catalog-api pod
-./chaos/runbook.sh pod-memory          # Memory spike in catalog-api pod
-./chaos/runbook.sh system-pod-kill     # Kill a kube-system pod (self-healing)
-./chaos/runbook.sh node-cordon         # Cordon the worker node
-./chaos/runbook.sh node-drain          # Drain the worker node
+./chaos/runbook.sh aerospike-down       # Aerospike container down
+./chaos/runbook.sh yugabyte-down        # YugabyteDB container down
+./chaos/runbook.sh pod-crash            # Crash catalog-api container (real restart)
+./chaos/runbook.sh pod-cpu              # CPU spike in catalog-api pod
+./chaos/runbook.sh pod-memory           # Memory spike in catalog-api pod
+./chaos/runbook.sh pod-latency          # +5s extra latency on catalog-api traffic
+./chaos/runbook.sh flaky-latency        # +3s extra latency on flaky-service traffic
+./chaos/runbook.sh node-network-latency # 500ms netem delay on worker node egress
+./chaos/runbook.sh system-pod-kill      # Kill a kube-system pod (self-healing)
+./chaos/runbook.sh node-cordon          # Cordon the worker node
+./chaos/runbook.sh node-drain           # Drain the worker node
 
 # Recover
 ./chaos/runbook.sh recover all
 ```
+
+> **Latency spike**: `pod-latency` and `flaky-latency` call the target service's
+> `/failure/latency` (or `/latency`) control endpoint, which injects a sustained
+> delay into every request (5s for catalog, 3s for flaky; override with
+> `POD_LATENCY_MS` or `FLAKY_LATENCY_MS`). Watch the **Latency** page focus the
+> affected pod and flag it **HIGH**, then clear it with `latency-off` /
+> `flaky-latency-off`. `node-network-latency` applies a `netem` 500ms egress
+> delay on the worker node (`NODE_LATENCY_MS` to override), which lifts every
+> in-cluster caller's latency; recover with `network-latency-off`.
+
+> **Game-day**: run an automated steady-state experiment from the **Chaos** page
+> (Game-day card) or via the API — baseline → inject → hold ≥ 60s → measure →
+> recover → report, with a degraded/recovered verdict. Every inject/recover
+> writes to `chaos/experiments/events.jsonl`; active faults are tracked in
+> `chaos/experiments/active.json`.
 
 ---
 
@@ -510,6 +581,26 @@ GET /api/metrics/health
 
 Checks VictoriaMetrics connectivity.
 
+```
+GET /api/metrics/latency?window=180&step=30&instance=<name>&pod=<name>
+```
+
+Returns p50 / p95 / p99 request-latency time series over the last `window`
+seconds at `step` intervals (`window` 30–3600s, `step` 5–300s). Used by the
+Latency page, which polls this endpoint every few seconds to keep the charts
+live. Optional `instance` / `pod` query params scope the percentiles to one
+target/pod.
+
+```
+GET /api/metrics/latency/pods
+```
+
+Returns the latest p50 / p95 / p99 and request rate **per scraped pod**, with a
+`high` flag when p99 exceeds 1s. Powers the Latency page's per-pod cards, the
+pod **Focus** selector, and the high-latency alert banner.
+
+---
+
 ---
 
 ## OpenSRE
@@ -525,6 +616,30 @@ GET /api/opensre/doctor
 ```
 
 Runs `opensre doctor` and returns the diagnostic output.
+
+### Evidence-grounded investigations
+
+The `opensre` CLI has no built-in Kubernetes tooling, so an RCA fed only a bare
+alert produces unverifiable triage ("Non-Validated Claims"). The backend
+collects **live cluster evidence** first (pod state, container reasons/exit
+codes, events, logs incl. `--previous`, per-pod request/5xx/p50-p95-p99 from
+VictoriaMetrics, namespace degraded counts) and embeds a compact digest into the
+alert `description` that the CLI's report reads and cites.
+
+- `POST /api/opensre/investigate` — accepts an alert payload (Grafana/Alertmanager
+  or a bare alert object), auto-attaches evidence, and runs a grounded RCA.
+  Returns an error instead of a thin report if evidence collection fails.
+- `scripts/investigate-alert.sh <alert.json> [kind-context]` — same flow from the
+  terminal (the OpenSRE CLI's own workflow):
+
+```bash
+./scripts/investigate-alert.sh /tmp/grafana-alert.json kind-opensre-demo
+```
+
+Target detection: the alert `labels` `pod` / `kubernetes_pod_name` /
+`namespace` / `kubernetes_namespace_name` pick the pod (deep evidence); without
+a pod, a full-stack crash story (cluster metrics, scrape health, degraded pods)
+is attached instead.
 
 ---
 
@@ -670,6 +785,16 @@ The React dashboard consists of the following pages:
 - VictoriaMetrics health status
 - Grafana integration
 - Live embedded Grafana dashboard (Catalog API Overview) with real-time panels
+
+### ⏱ Latency
+
+- Live P50 / P95 / P99 latency tiles (tail-risk spread = p99 − p50)
+- Auto-refreshing line chart of latency percentiles (5s / 10s / 30s selectable, pause/resume)
+- Plots the high-resolution `http_request_duration_highr_seconds` histogram
+- Per-pod latency cards (each pod's p50/p95/p99 + req/s) with a **HIGH** flag when p99 > 1s
+- Pod **Focus** selector covers every `opensre` namespace pod — pods without the
+  instrumentation scrape (`prometheus.io/scrape: "true"`) show as **no data**
+- High-latency alert banner when any scraped pod's p99 exceeds 1s
 
 ---
 
@@ -945,6 +1070,7 @@ Screenshots of the application will be added after the dashboard UI is finalized
 - ✔ Aerospike Connector
 - ✔ YugabyteDB Connector
 - ✔ GitHub Integration
+- ✔ Live Latency Page (p50/p95/p99)
 
 ---
 

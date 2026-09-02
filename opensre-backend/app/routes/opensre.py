@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -40,7 +42,59 @@ def status():
 
 @router.post("/investigate")
 def investigate(request: InvestigationRequest):
-    return opensre_cli.investigate(request.alert_payload)
+    alert = _parse_alert_payload(request.alert_payload)
+
+    if alert is None:
+        return {
+            "success": False,
+            "error": "alert_payload must be a JSON object describing an alert",
+        }
+
+    result = investigation.collect_alert_evidence(alert)
+
+    if not result.get("success"):
+        # Never forward a bare alert: that produces unverifiable
+        # "Non-Validated Claims" triage instead of a grounded RCA.
+        return result
+
+    return opensre_cli.investigate(result["payload"])
+
+
+def _parse_alert_payload(alert_payload: str):
+    """
+    Normalize inbound alert payloads (Grafana notification, Alertmanager
+    webhook, or a bare alert object) into a single alert dict.
+    """
+    if not alert_payload:
+        return None
+
+    try:
+        data = json.loads(alert_payload)
+    except (TypeError, ValueError):
+        data = None
+
+    if isinstance(data, dict):
+        # Alertmanager webhook wrapping multiple alerts.
+        if isinstance(data.get("alerts"), list) and data["alerts"]:
+            data = data["alerts"][0]
+
+        if "labels" in data or "alertname" in data or "annotations" in data:
+            return data
+
+        return None
+
+    if isinstance(data, list):
+        for candidate in data:
+            if isinstance(candidate, dict) and (
+                "labels" in candidate
+                or "alertname" in candidate
+                or "annotations" in candidate
+            ):
+                return candidate
+
+        return None
+
+    return None
 
 
 @router.get("/investigate/pod/{namespace}/{pod_name}")
