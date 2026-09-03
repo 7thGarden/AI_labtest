@@ -3,6 +3,7 @@ import socket
 from app.core.config import settings
 from app.services import aerospike
 from app.services import containers
+from app.services import git_correlation
 from app.services import grafana
 from app.services import kubectl
 from app.services import victoriametrics
@@ -225,6 +226,8 @@ def collect_pod_evidence(
 
     # VictoriaMetrics per-pod traffic + latency metrics (kubernetes-pods job)
     evidence["metrics"]["pod"] = _collect_pod_metrics(pod_name)
+
+    evidence["git"] = git_correlation.correlate_commits(incident_start=None)
 
     return {
         "success": True,
@@ -523,6 +526,8 @@ def collect_stack_evidence(context: str | None = None):
     _collect_grafana_summary(evidence)
     _collect_database_summary(evidence)
 
+    evidence["git"] = git_correlation.correlate_commits(incident_start=None)
+
     return {
         "success": True,
         "evidence": evidence,
@@ -675,7 +680,11 @@ def collect_alert_evidence(
             "error": "Unable to collect live cluster evidence for the alert",
         }
 
-    digest = _evidence_digest(alert, evidence)
+    starts_at = alert.get("startsAt") or alert.get("starts_at")
+    git_corr = git_correlation.correlate_commits(incident_start=starts_at)
+    evidence["git"] = git_corr
+
+    digest = _evidence_digest(alert, evidence, git_corr)
 
     payload = _normalize_alert(alert, digest)
 
@@ -719,7 +728,7 @@ def _normalize_alert(alert: dict, digest: str):
     }
 
 
-def _evidence_digest(alert: dict, evidence: dict, max_chars: int = 1800):
+def _evidence_digest(alert: dict, evidence: dict, git_corr=None, max_chars: int = 2200):
     """
     Compact, human-readable summary of the live facts collected for an alert.
     Folding this into the payload (and description) guarantees the agent sees
@@ -880,6 +889,11 @@ def _evidence_digest(alert: dict, evidence: dict, max_chars: int = 1800):
     for name, item in databases.items():
         if isinstance(item, dict) and not item.get("success"):
             lines.append(f"database {name}: unhealthy ({item.get('error')})")
+
+    git_lines = git_correlation.git_digest_lines(git_corr)
+    if git_lines:
+        lines.append("")
+        lines.extend(git_lines)
 
     digest = "\n".join(lines).strip()
     return digest[:max_chars]
