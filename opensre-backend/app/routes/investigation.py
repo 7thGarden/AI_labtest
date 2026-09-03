@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Query
 
+from app.services import git_correlation
 from app.services import investigation
 from app.utils.command import run_command
 
@@ -7,6 +8,31 @@ router = APIRouter(
     prefix="/api/investigation",
     tags=["Investigation"],
 )
+
+
+@router.get("/git-correlation")
+def git_correlation_endpoint(
+    incident_start: str | None = Query(
+        default=None,
+        description="ISO-8601 incident start time (e.g. 2026-09-01T12:43:00Z). "
+        "Omit to attribute to the newest commit overall.",
+    ),
+    branch: str | None = Query(
+        default=None,
+        description="Branch/tag/SHA to correlate against (default = repo default branch).",
+    ),
+    limit: int = Query(default=10, ge=1, le=100),
+):
+    """
+    Correlate an incident time with recent git history and identify the
+    suspected change-point commit (the newest commit at-or-before the incident
+    start). Read-only lookup against the GitHub API; never writes/pushes.
+    """
+    return git_correlation.correlate_commits(
+        incident_start=incident_start,
+        limit=limit,
+        branch=branch,
+    )
 
 
 @router.get("/analyze")

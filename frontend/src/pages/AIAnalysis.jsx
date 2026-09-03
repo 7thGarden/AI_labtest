@@ -23,6 +23,8 @@ import {
   Database,
   HardDrive,
   Layers,
+  GitCommit,
+  ExternalLink,
 } from "lucide-react";
 
 export default function AIAnalysis() {
@@ -46,6 +48,7 @@ export default function AIAnalysis() {
     "opensre:investigationTarget",
     ""
   );
+  const [gitCorrelation, setGitCorrelation] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const [message, setMessage] = useState("");
@@ -219,9 +222,19 @@ export default function AIAnalysis() {
         setInvestigation({
           error: data.stderr || "OpenSRE investigation failed.",
         });
+        setGitCorrelation(null);
       } else {
         const stdout = stripAnsi(data.stdout || "");
         setInvestigation({ stdout, report: extractReport(stdout) });
+
+        try {
+          const corrRes = await api.get("/investigation/git-correlation", {
+            params: { limit: 10 },
+          });
+          setGitCorrelation(corrRes.data.success ? corrRes.data : null);
+        } catch {
+          setGitCorrelation(null);
+        }
       }
 
       setInvestigationTarget(
@@ -589,6 +602,57 @@ export default function AIAnalysis() {
                       </div>
                     </div>
                   </div>
+
+                  {gitCorrelation?.suspected_commit && (
+                    <div style={{
+                      padding: "var(--space-3)",
+                      border: "2px solid var(--primary)",
+                      borderRadius: 6,
+                      background: "var(--bg-muted)",
+                      marginTop: "var(--space-3)",
+                    }}>
+                      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: "var(--space-1)", display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+                        <GitCommit size={13} /> Suspected change-point commit
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+                        <code style={{ fontSize: 13, fontWeight: 600 }}>
+                          {gitCorrelation.suspected_commit.sha?.substring(0, 7)}
+                        </code>
+                        <span style={{ fontSize: 13 }}>
+                          {gitCorrelation.suspected_commit.message}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 12, color: "var(--muted)", marginTop: "var(--space-1)", display: "flex", gap: "var(--space-3)" }}>
+                        <span>by {gitCorrelation.suspected_commit.author || "—"}</span>
+                        <span>{gitCorrelation.suspected_commit.date ? new Date(gitCorrelation.suspected_commit.date).toLocaleString() : "—"}</span>
+                      </div>
+                      <div style={{ marginTop: "var(--space-2)" }}>
+                        <a
+                          href={`https://github.com/${gitCorrelation.repo || ""}/commit/${gitCorrelation.suspected_commit.sha}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="btn btn--ghost btn--sm"
+                        >
+                          <ExternalLink size={12} /> View on GitHub
+                        </a>
+                      </div>
+                    </div>
+                  )}
+
+                  {gitCorrelation?.no_commit_found && (
+                    <div style={{
+                      padding: "var(--space-3)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      background: "var(--bg-muted)",
+                      marginTop: "var(--space-3)",
+                      fontSize: 13,
+                      color: "var(--muted)",
+                    }}>
+                      No commit found at-or-before the incident start on branch <code>{gitCorrelation.branch || "default"}</code>.
+                      Attribution is inconclusive — the incident may pre-date deploy history.
+                    </div>
+                  )}
 
                   {report.problem_md && (
                     <ProblemFraming

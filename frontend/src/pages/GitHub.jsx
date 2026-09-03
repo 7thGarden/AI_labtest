@@ -20,6 +20,7 @@ const TAB_CONFIG = [
   { id: "commits", label: "Commits", icon: GitCommit },
   { id: "workflows", label: "Workflows", icon: GitMerge },
   { id: "issues", label: "Issues", icon: AlertCircle },
+  { id: "correlation", label: "Incident Correlation", icon: Search },
 ];
 
 export default function GitHub() {
@@ -37,6 +38,10 @@ export default function GitHub() {
   const [since, setSince] = useState("");
   const [until, setUntil] = useState("");
   const [issueState, setIssueState] = useState("open");
+  const [incidentStart, setIncidentStart] = useState("");
+  const [correlationResult, setCorrelationResult] = useState(null);
+  const [correlationLoading, setCorrelationLoading] = useState(false);
+  const [correlationError, setCorrelationError] = useState(null);
 
   useEffect(() => {
     async function load() {
@@ -111,11 +116,32 @@ export default function GitHub() {
     }
   };
 
+  const loadCorrelation = async () => {
+    setCorrelationLoading(true);
+    setCorrelationError(null);
+    try {
+      const params = new URLSearchParams();
+      if (incidentStart) {
+        const iso = new Date(incidentStart).toISOString();
+        params.append("incident_start", iso);
+      }
+      if (selectedBranch) params.append("branch", selectedBranch);
+      params.append("limit", "10");
+      const res = await api.get(`/investigation/git-correlation?${params.toString()}`);
+      if (res.data.success) setCorrelationResult(res.data);
+      else setCorrelationError(res.data.error || "Correlation failed");
+    } catch (e) {
+      setCorrelationError(e.message);
+    } finally {
+      setCorrelationLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (status === "connected" && selectedBranch) {
       if (activeTab === "commits") loadCommits(selectedBranch);
       else if (activeTab === "workflows") loadWorkflows();
-      else loadIssues();
+      else if (activeTab === "issues") loadIssues();
     }
   }, [status, activeTab, selectedBranch, issueState]);
 
@@ -300,6 +326,154 @@ export default function GitHub() {
     );
   };
 
+  const renderCorrelation = () => {
+    return (
+      <div>
+        <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "flex-end", marginBottom: "var(--space-4)", flexWrap: "wrap" }}>
+          <div>
+            <label className="text-muted" style={{ fontSize: 12, display: "block", marginBottom: "var(--space-1)" }}>
+              Incident start (UTC)
+            </label>
+            <input
+              type="datetime-local"
+              value={incidentStart}
+              onChange={(e) => setIncidentStart(e.target.value)}
+              style={{ width: 220 }}
+            />
+          </div>
+          <button
+            onClick={loadCorrelation}
+            className="btn btn--primary btn--sm"
+            disabled={correlationLoading}
+          >
+            {correlationLoading ? (
+              <><Loader2 size={14} className="btn__spinner" /> Correlating…</>
+            ) : (
+              <><Search size={14} /> Find change-point</>
+            )}
+          </button>
+        </div>
+
+        {correlationError && (
+          <div className="alert alert--danger" style={{ marginBottom: "var(--space-4)" }}>
+            {correlationError}
+          </div>
+        )}
+
+        {correlationResult && (
+          <div style={{ display: "grid", gap: "var(--space-3)" }}>
+            {correlationResult.no_commit_found ? (
+              <div style={{
+                padding: "var(--space-3)",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                background: "var(--bg-muted)",
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: "var(--space-1)" }}>
+                  No commit found before incident
+                </div>
+                <div style={{ fontSize: 13, color: "var(--muted)" }}>
+                  The incident start ({correlationResult.incident_start || "not specified"}) predates all commits on
+                  branch <code>{correlationResult.branch || "default"}</code>. Attribution is inconclusive — the incident may
+                  pre-date the deploy history, or no deploy was performed before the incident.
+                </div>
+              </div>
+            ) : correlationResult.suspected_commit ? (
+              <>
+                <div style={{
+                  padding: "var(--space-3)",
+                  border: "2px solid var(--primary)",
+                  borderRadius: 6,
+                  background: "var(--bg-muted)",
+                }}>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: "var(--space-1)" }}>
+                    Suspected change-point commit
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+                    <code style={{ fontSize: 13, fontWeight: 600 }}>
+                      {correlationResult.suspected_commit.sha?.substring(0, 7)}
+                    </code>
+                    <span style={{ fontSize: 13 }}>
+                      {correlationResult.suspected_commit.message}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: "var(--space-1)", display: "flex", gap: "var(--space-3)" }}>
+                    <span><User size={12} style={{ verticalAlign: "middle" }} /> {correlationResult.suspected_commit.author || "—"}</span>
+                    <span>{formatDate(correlationResult.suspected_commit.date)}</span>
+                  </div>
+                  <div style={{ marginTop: "var(--space-2)" }}>
+                    <a
+                      href={`https://github.com/${correlationResult.repo || ""}/commit/${correlationResult.suspected_commit.sha}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn btn--ghost btn--sm"
+                    >
+                      <ExternalLink size={12} /> View on GitHub
+                    </a>
+                  </div>
+                </div>
+
+                {correlationResult.window_before_incident?.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: "var(--space-1)" }}>
+                      Commits before incident
+                    </div>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                          <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Commit</th>
+                          <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Message</th>
+                          <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Author</th>
+                          <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Date</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {correlationResult.window_before_incident.map((c) => (
+                          <tr key={c.sha} style={{ borderBottom: "1px solid var(--border)" }}>
+                            <td style={{ padding: "var(--space-2)", fontFamily: "monospace", fontSize: 12 }}>
+                              {c.sha?.substring(0, 7)}
+                            </td>
+                            <td style={{ padding: "var(--space-2)", maxWidth: 400, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                              {c.message}
+                            </td>
+                            <td style={{ padding: "var(--space-2)" }}>
+                              <User size={12} style={{ marginRight: 4, verticalAlign: "middle" }} />
+                              {c.author || "—"}
+                            </td>
+                            <td style={{ padding: "var(--space-2)", whiteSpace: "nowrap", color: "var(--muted)" }}>
+                              {formatDate(c.date)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{ padding: "var(--space-3)", fontSize: 13, color: "var(--muted)" }}>
+                No result returned from correlation service.
+              </div>
+            )}
+          </div>
+        )}
+
+        {!correlationResult && !correlationError && !correlationLoading && (
+          <div className="empty-state" style={{ padding: "var(--space-6) 0" }}>
+            <Search size={26} />
+            <div>
+              <strong>Correlate an incident with git history</strong>
+              <p style={{ marginTop: "var(--space-1)", maxWidth: 420, fontSize: 13 }}>
+                Enter the incident start time and click "Find change-point" to identify
+                which commit was likely deployed before the incident began.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <>
       <div className="page-head">
@@ -414,10 +588,11 @@ export default function GitHub() {
               onClick={() => {
                 if (activeTab === "commits") loadCommits(selectedBranch);
                 else if (activeTab === "workflows") loadWorkflows();
-                else loadIssues();
+                else if (activeTab === "issues") loadIssues();
+                else if (activeTab === "correlation") loadCorrelation();
               }}
               className="btn btn--primary btn--sm"
-              disabled={loading[activeTab]}
+              disabled={loading[activeTab] || (activeTab === "correlation" && correlationLoading)}
             >
               <Search size={14} /> Refresh
             </button>
@@ -452,6 +627,7 @@ export default function GitHub() {
           {activeTab === "commits" && renderCommits()}
           {activeTab === "workflows" && renderWorkflows()}
           {activeTab === "issues" && renderIssues()}
+          {activeTab === "correlation" && renderCorrelation()}
         </Card>
       </div>
     </>
