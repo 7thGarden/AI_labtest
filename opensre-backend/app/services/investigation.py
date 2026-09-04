@@ -593,8 +593,8 @@ def collect_target_evidence(target: str):
 def collect_workflow_evidence(run_id: int):
     """
     Collect evidence for a GitHub Actions workflow run so OpenSRE can
-    investigate a failed pipeline. Gathers run details, job steps, and
-    the commit it ran against.
+    investigate a failed pipeline. Gathers run details, job steps with
+    failed log snippets, and the commit it ran against.
     """
     from app.services import github
 
@@ -617,43 +617,52 @@ def collect_workflow_evidence(run_id: int):
             "conclusion": conclusion,
             "status": run.get("status"),
             "head_sha": head_sha,
+            "short_sha": head_sha[:7],
             "html_url": run.get("html_url"),
             "created_at": run.get("created_at"),
             "updated_at": run.get("updated_at"),
             "event": run.get("event"),
+            "run_number": run.get("run_number"),
         },
         "jobs": [],
+        "failed_jobs": [],
         "git": git_correlation.correlate_commits(
             incident_start=run.get("created_at"),
             branch=run.get("head_branch"),
         ),
     }
 
-    jobs_result = github.get_workflow_run_jobs(run_id)
+    jobs_result = github.get_workflow_run_jobs_with_logs(run_id)
     failed_steps = []
 
     if jobs_result.get("success"):
         for job in jobs_result.get("data") or []:
             job_info = {
                 "name": job.get("name"),
+                "id": job.get("id"),
                 "conclusion": job.get("conclusion"),
                 "status": job.get("status"),
                 "started_at": job.get("started_at"),
                 "completed_at": job.get("completed_at"),
                 "steps": [],
+                "logs_snippet": job.get("logs_snippet"),
             }
             for step in job.get("steps") or []:
                 step_info = {
                     "name": step.get("name"),
                     "conclusion": step.get("conclusion"),
                     "status": step.get("status"),
+                    "number": step.get("number"),
                 }
                 job_info["steps"].append(step_info)
                 if step.get("conclusion") == "failure":
                     failed_steps.append(
                         f"{job.get('name')} / {step.get('name')}"
                     )
+
             evidence["jobs"].append(job_info)
+            if job.get("conclusion") == "failure":
+                evidence["failed_jobs"].append(job_info)
 
     summary_lines = [
         f"workflow: {run.get('name')} (run #{run_id})",

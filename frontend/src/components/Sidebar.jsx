@@ -41,7 +41,7 @@ const NAV = [
   },
   {
     section: "Integrations",
-    items: [{ to: "/github", label: "GitHub", icon: GitBranch }],
+    items: [{ to: "/github", label: "GitHub & CI/CD", icon: GitBranch }],
   },
   {
     section: "Chaos",

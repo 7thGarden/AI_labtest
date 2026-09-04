@@ -76,6 +76,37 @@ class GitHubClient:
     def get_workflow_run_logs(self, run_id: int, job_id: int):
         return self._get(f"/actions/runs/{run_id}/jobs/{job_id}/logs")
 
+    def get_workflow_run_jobs_with_logs(self, run_id: int):
+        """Fetch jobs and attach log snippets for failed steps."""
+        jobs_result = self.get_workflow_run_jobs(run_id)
+        if not jobs_result.get("success"):
+            return jobs_result
+
+        enriched_jobs = []
+        for job in jobs_result.get("data") or []:
+            job_data = dict(job)
+            failed_steps = [
+                s for s in (job.get("steps") or [])
+                if s.get("conclusion") == "failure"
+            ]
+
+            if failed_steps:
+                logs_result = self.get_workflow_run_logs(run_id, job["id"])
+                if logs_result.get("success"):
+                    raw_logs = logs_result.get("data") or ""
+                    job_data["logs_snippet"] = raw_logs[-3000:]
+                else:
+                    job_data["logs_snippet"] = (
+                        f"[logs unavailable: {logs_result.get('error', 'unknown')}]"
+                    )
+            else:
+                job_data["logs_snippet"] = None
+
+            enriched_jobs.append(job_data)
+
+        jobs_result["data"] = enriched_jobs
+        return jobs_result
+
     def get_issues(self, state: str = "open", limit: int = 30):
         params = {"state": state, "per_page": min(limit, 100), "page": 1, "sort": "updated", "direction": "desc"}
         result = self._get("/issues", params)
@@ -116,6 +147,10 @@ def get_workflow_run_jobs(run_id: int):
 
 def get_workflow_run_logs(run_id: int, job_id: int):
     return github.get_workflow_run_logs(run_id, job_id)
+
+
+def get_workflow_run_jobs_with_logs(run_id: int):
+    return github.get_workflow_run_jobs_with_logs(run_id)
 
 
 def get_issues(state: str = "open", limit: int = 30):

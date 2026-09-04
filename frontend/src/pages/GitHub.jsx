@@ -14,9 +14,13 @@ import {
   User,
   ExternalLink,
   Search,
+  ChevronDown,
+  ChevronRight,
+  Rocket,
+  AlertTriangle,
 } from "lucide-react";
 
-const TAB_CONFIG = [
+const TABS = [
   { id: "commits", label: "Commits", icon: GitCommit },
   { id: "workflows", label: "Workflows", icon: GitMerge },
   { id: "issues", label: "Issues", icon: AlertCircle },
@@ -30,21 +34,29 @@ export default function GitHub() {
   const [branches, setBranches] = useState([]);
   const [selectedBranch, setSelectedBranch] = useState("");
   const [activeTab, setActiveTab] = useState("commits");
+
   const [commits, setCommits] = useState([]);
   const [workflows, setWorkflows] = useState([]);
   const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState({ commits: false, workflows: false, issues: false });
   const [error, setError] = useState(null);
+
   const [since, setSince] = useState("");
   const [until, setUntil] = useState("");
   const [issueState, setIssueState] = useState("open");
+
   const [incidentStart, setIncidentStart] = useState("");
   const [correlationResult, setCorrelationResult] = useState(null);
   const [correlationLoading, setCorrelationLoading] = useState(false);
   const [correlationError, setCorrelationError] = useState(null);
-  const [workflowInvestigation, setWorkflowInvestigation] = useState(null);
-  const [workflowInvestigating, setWorkflowInvestigating] = useState(false);
-  const [workflowInvestError, setWorkflowInvestError] = useState(null);
+
+  const [selectedRun, setSelectedRun] = useState(null);
+  const [jobs, setJobs] = useState([]);
+  const [jobsLoading, setJobsLoading] = useState(false);
+  const [expandedJob, setExpandedJob] = useState(null);
+  const [investigation, setInvestigation] = useState(null);
+  const [investigating, setInvestigating] = useState(false);
+  const [investError, setInvestError] = useState(null);
 
   useEffect(() => {
     async function load() {
@@ -119,14 +131,50 @@ export default function GitHub() {
     }
   };
 
+  const loadJobs = async (run) => {
+    setSelectedRun(run);
+    setJobs([]);
+    setJobsLoading(true);
+    setInvestigation(null);
+    setInvestError(null);
+    setExpandedJob(null);
+    try {
+      const res = await api.get(`/github/workflow-runs/${run.id}/jobs`);
+      if (res.data.success) setJobs(res.data.data || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setJobsLoading(false);
+    }
+  };
+
+  const investigateRun = async (run) => {
+    setInvestigating(true);
+    setInvestigation(null);
+    setInvestError(null);
+    try {
+      const res = await api.get(`/github/workflow-runs/${run.id}/investigate`);
+      const data = res.data;
+      if (!data.success) {
+        setInvestError(data.stderr || data.error || "Investigation failed");
+      } else {
+        const stdout = data.stdout || "";
+        setInvestigation({ run, stdout, report: extractReport(stdout) });
+      }
+    } catch (e) {
+      setInvestError(e.message);
+    } finally {
+      setInvestigating(false);
+    }
+  };
+
   const loadCorrelation = async () => {
     setCorrelationLoading(true);
     setCorrelationError(null);
     try {
       const params = new URLSearchParams();
       if (incidentStart) {
-        const iso = new Date(incidentStart).toISOString();
-        params.append("incident_start", iso);
+        params.append("incident_start", new Date(incidentStart).toISOString());
       }
       if (selectedBranch) params.append("branch", selectedBranch);
       params.append("limit", "10");
@@ -140,30 +188,6 @@ export default function GitHub() {
     }
   };
 
-  const investigateWorkflow = async (run) => {
-    setWorkflowInvestigating(true);
-    setWorkflowInvestigation(null);
-    setWorkflowInvestError(null);
-    try {
-      const res = await api.get(`/github/workflow-runs/${run.id}/investigate`);
-      const data = res.data;
-      if (!data.success) {
-        setWorkflowInvestError(data.stderr || data.error || "Investigation failed");
-      } else {
-        const stdout = data.stdout || "";
-        setWorkflowInvestigation({
-          run,
-          stdout,
-          success: data.success,
-        });
-      }
-    } catch (e) {
-      setWorkflowInvestError(e.message);
-    } finally {
-      setWorkflowInvestigating(false);
-    }
-  };
-
   useEffect(() => {
     if (status === "connected" && selectedBranch) {
       if (activeTab === "commits") loadCommits(selectedBranch);
@@ -172,38 +196,42 @@ export default function GitHub() {
     }
   }, [status, activeTab, selectedBranch, issueState]);
 
-  const tone =
-    status === "connected"
-      ? "success"
-      : status === "unreachable" || status === "backend-offline"
-        ? "danger"
-        : "neutral";
-
-  const label =
-    status === "connected"
-      ? "Connected"
-      : status === "unreachable"
-        ? "Unreachable"
-        : status === "backend-offline"
-          ? "Backend offline"
-          : "Checking…";
-
-  const formatDate = (dateStr) => {
-    if (!dateStr) return "—";
-    return new Date(dateStr).toLocaleString();
+  const extractReport = (stdout) => {
+    const report = {};
+    const rootMatch = stdout.match(/"root_cause":\s*"([\s\S]*?)"\s*,/);
+    if (rootMatch) report.root_cause = rootMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+    const reportMatch = stdout.match(/"report":\s*"([\s\S]*?)"\s*,/);
+    if (reportMatch) {
+      report.report_md = reportMatch[1]
+        .replace(/\\n/g, "\n").replace(/\\"/g, '"')
+        .replace(/\\u2022/g, "•").replace(/\\u2014/g, "—");
+    }
+    return report;
   };
 
-  const getWorkflowStatus = (run) => {
-    if (run.conclusion === "success") return { label: "Success", tone: "success", icon: CheckCircle2 };
-    if (run.conclusion === "failure") return { label: "Failed", tone: "danger", icon: XCircle };
-    if (run.status === "in_progress") return { label: "Running", tone: "neutral", icon: Loader2 };
-    if (run.status === "queued") return { label: "Queued", tone: "neutral", icon: Clock };
-    return { label: run.conclusion || run.status, tone: "neutral", icon: Clock };
+  const formatDate = (d) => (d ? new Date(d).toLocaleString() : "—");
+
+  const getWorkflowStatus = (r) => {
+    if (r.conclusion === "success") return { label: "Passed", tone: "success", icon: CheckCircle2 };
+    if (r.conclusion === "failure") return { label: "Failed", tone: "danger", icon: XCircle };
+    if (r.conclusion === "cancelled") return { label: "Cancelled", tone: "neutral", icon: XCircle };
+    if (r.status === "in_progress") return { label: "Running", tone: "info", icon: Loader2 };
+    if (r.status === "queued") return { label: "Queued", tone: "neutral", icon: Clock };
+    return { label: r.conclusion || r.status, tone: "neutral", icon: Clock };
   };
 
-  const getIssueState = (issue) => {
-    if (issue.state === "open") return { label: "Open", tone: "success", icon: AlertCircle };
+  const getIssueState = (i) => {
+    if (i.state === "open") return { label: "Open", tone: "success", icon: AlertCircle };
     return { label: "Closed", tone: "neutral", icon: CheckCircle2 };
+  };
+
+  const tone = status === "connected" ? "success" : status === "unreachable" || status === "backend-offline" ? "danger" : "neutral";
+  const label = status === "connected" ? "Connected" : status === "unreachable" ? "Unreachable" : status === "backend-offline" ? "Backend offline" : "Checking…";
+
+  const pipelineStats = {
+    passed: workflows.filter((r) => r.conclusion === "success").length,
+    failed: workflows.filter((r) => r.conclusion === "failure").length,
+    running: workflows.filter((r) => r.status === "in_progress").length,
   };
 
   const renderCommits = () => {
@@ -255,13 +283,29 @@ export default function GitHub() {
     if (!workflows.length) return <div className="empty">No workflow runs found</div>;
     return (
       <div>
+        <div style={{ display: "flex", gap: "var(--space-4)", marginBottom: "var(--space-3)", fontSize: 13 }}>
+          <div>
+            <span className="text-muted">Passed: </span>
+            <span style={{ fontWeight: 600, color: "var(--color-success)" }}>{pipelineStats.passed}</span>
+          </div>
+          <div>
+            <span className="text-muted">Failed: </span>
+            <span style={{ fontWeight: 600, color: "var(--color-danger)" }}>{pipelineStats.failed}</span>
+          </div>
+          <div>
+            <span className="text-muted">Running: </span>
+            <span style={{ fontWeight: 600, color: "var(--color-info)" }}>{pipelineStats.running}</span>
+          </div>
+        </div>
+
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Run</th>
                 <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Workflow</th>
                 <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Branch</th>
-                <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Event</th>
+                <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Commit</th>
                 <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Status</th>
                 <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Started</th>
                 <th style={{ textAlign: "left", padding: "var(--space-2)", width: 80 }}></th>
@@ -269,42 +313,57 @@ export default function GitHub() {
             </thead>
             <tbody>
               {workflows.slice(0, 50).map((w) => {
-                const statusInfo = getWorkflowStatus(w);
-                const Icon = statusInfo.icon;
+                const si = getWorkflowStatus(w);
+                const Icon = si.icon;
                 const isFailed = w.conclusion === "failure";
+                const isSelected = selectedRun?.id === w.id;
                 return (
-                  <tr key={w.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <tr
+                    key={w.id}
+                    style={{
+                      borderBottom: "1px solid var(--border)",
+                      background: isSelected ? "var(--bg-muted)" : undefined,
+                      cursor: "pointer",
+                    }}
+                    onClick={() => loadJobs(w)}
+                  >
+                    <td style={{ padding: "var(--space-2)", fontFamily: "monospace", fontSize: 12, color: "var(--muted)" }}>
+                      #{w.run_number || w.id}
+                    </td>
                     <td style={{ padding: "var(--space-2)", fontWeight: 500 }}>{w.name}</td>
-                    <td style={{ padding: "var(--space-2)", fontFamily: "monospace", fontSize: 12 }}>
+                    <td style={{ padding: "var(--space-2)" }}>
+                      <GitBranch size={12} style={{ marginRight: 4, verticalAlign: "middle" }} />
                       {w.head_branch}
                     </td>
-                    <td style={{ padding: "var(--space-2)", textTransform: "capitalize" }}>{w.event}</td>
+                    <td style={{ padding: "var(--space-2)", fontFamily: "monospace", fontSize: 12 }}>
+                      {w.head_sha?.substring(0, 7)}
+                    </td>
                     <td style={{ padding: "var(--space-2)" }}>
-                      <Badge tone={statusInfo.tone}>
-                        <Icon size={12} /> {statusInfo.label}
-                      </Badge>
+                      <Badge tone={si.tone}><Icon size={12} /> {si.label}</Badge>
                     </td>
                     <td style={{ padding: "var(--space-2)", whiteSpace: "nowrap", color: "var(--muted)" }}>
                       {formatDate(w.run_started_at)}
                     </td>
-                    <td style={{ padding: "var(--space-2)", display: "flex", gap: "var(--space-1)" }}>
-                      {isFailed && (
-                        <button
-                          className="btn btn--ghost btn--sm"
-                          style={{ padding: "var(--space-1)" }}
-                          onClick={() => investigateWorkflow(w)}
-                          disabled={workflowInvestigating}
-                        >
-                          {workflowInvestigating && workflowInvestigation?.run?.id === w.id ? (
-                            <Loader2 size={12} className="btn__spinner" />
-                          ) : (
-                            <Search size={12} />
-                          )}
-                        </button>
-                      )}
-                      <a href={w.html_url} target="_blank" rel="noreferrer" className="btn btn--ghost btn--sm" style={{ padding: "var(--space-1)" }}>
-                        <ExternalLink size={12} />
-                      </a>
+                    <td style={{ padding: "var(--space-2)" }} onClick={(e) => e.stopPropagation()}>
+                      <div style={{ display: "flex", gap: "var(--space-1)" }}>
+                        {isFailed && (
+                          <button
+                            className="btn btn--ghost btn--sm"
+                            style={{ padding: "var(--space-1)" }}
+                            onClick={() => investigateRun(w)}
+                            disabled={investigating}
+                          >
+                            {investigating && investigation?.run?.id === w.id ? (
+                              <Loader2 size={12} className="btn__spinner" />
+                            ) : (
+                              <Search size={12} />
+                            )}
+                          </button>
+                        )}
+                        <a href={w.html_url} target="_blank" rel="noreferrer" className="btn btn--ghost btn--sm" style={{ padding: "var(--space-1)" }}>
+                          <ExternalLink size={12} />
+                        </a>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -313,27 +372,151 @@ export default function GitHub() {
           </table>
         </div>
 
-        {workflowInvestError && (
-          <div className="alert alert--danger" style={{ marginTop: "var(--space-3)" }}>
-            {workflowInvestError}
+        {selectedRun && (
+          <div style={{ marginTop: "var(--space-4)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--space-3)" }}>
+              <div>
+                <h3 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>
+                  Jobs — Run #{selectedRun.run_number || selectedRun.id}
+                </h3>
+                <p style={{ fontSize: 12, color: "var(--muted)", margin: 0 }}>
+                  {selectedRun.name} on {selectedRun.head_branch}
+                </p>
+              </div>
+              {selectedRun.conclusion === "failure" && (
+                <button
+                  className="btn btn--primary btn--sm"
+                  onClick={() => investigateRun(selectedRun)}
+                  disabled={investigating}
+                >
+                  {investigating ? <Loader2 size={14} className="btn__spinner" /> : <Rocket size={14} />}
+                  {" "}Investigate with OpenSRE
+                </button>
+              )}
+            </div>
+
+            {jobsLoading ? (
+              <div className="loading"><Loader2 size={16} className="btn__spinner" /> Loading jobs…</div>
+            ) : (
+              <div style={{ display: "grid", gap: "var(--space-2)" }}>
+                {jobs.map((job) => {
+                  const jobFailed = job.conclusion === "failure";
+                  const isExpanded = expandedJob === job.id;
+                  return (
+                    <div
+                      key={job.id}
+                      style={{
+                        border: `1px solid ${jobFailed ? "var(--color-danger)" : "var(--border)"}`,
+                        borderRadius: 6,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "var(--space-2)",
+                          padding: "var(--space-2) var(--space-3)",
+                          background: jobFailed ? "rgba(var(--color-danger-rgb, 220,53,69), 0.05)" : undefined,
+                          cursor: job.logs_snippet ? "pointer" : "default",
+                        }}
+                        onClick={() => job.logs_snippet && setExpandedJob(isExpanded ? null : job.id)}
+                      >
+                        {job.logs_snippet ? (
+                          isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />
+                        ) : <span style={{ width: 14 }} />}
+                        <span style={{ fontWeight: 500, flex: 1 }}>{job.name}</span>
+                        <Badge tone={job.conclusion === "success" ? "success" : jobFailed ? "danger" : "neutral"}>
+                          {job.conclusion === "success" ? <CheckCircle2 size={12} /> : jobFailed ? <XCircle size={12} /> : <Clock size={12} />}
+                          {" "}{job.conclusion || job.status}
+                        </Badge>
+                      </div>
+
+                      {job.steps?.length > 0 && (
+                        <div style={{ padding: "0 var(--space-3) var(--space-2)", display: "flex", gap: "var(--space-2)", flexWrap: "wrap", fontSize: 12 }}>
+                          {job.steps.map((step, i) => (
+                            <span
+                              key={i}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 4,
+                                color: step.conclusion === "failure" ? "var(--color-danger)" : step.conclusion === "success" ? "var(--color-success)" : "var(--muted)",
+                              }}
+                            >
+                              {step.conclusion === "success" ? <CheckCircle2 size={11} /> : step.conclusion === "failure" ? <XCircle size={11} /> : <Clock size={11} />}
+                              {" "}{step.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {isExpanded && job.logs_snippet && (
+                        <div style={{ borderTop: "1px solid var(--border)", padding: "var(--space-2) var(--space-3)", background: "var(--bg-muted)" }}>
+                          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: "var(--space-1)", fontWeight: 500 }}>Failure logs</div>
+                          <pre style={{ fontSize: 11, maxHeight: 250, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0, fontFamily: "monospace" }}>
+                            {job.logs_snippet}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
-        {workflowInvestigation && (
+        {investError && (
+          <div className="alert alert--danger" style={{ marginTop: "var(--space-3)" }}>{investError}</div>
+        )}
+
+        {investigation && (
           <div style={{ marginTop: "var(--space-4)" }}>
             <Card
-              title="Investigation report"
-              subtitle={`Run #${workflowInvestigation.run.id} · ${workflowInvestigation.run.name} · ${workflowInvestigation.run.conclusion}`}
+              title="Investigation Report"
+              subtitle={`Run #${investigation.run.run_number || investigation.run.id} · ${investigation.run.name} · ${investigation.run.conclusion}`}
               actions={
-                <Badge tone={workflowInvestigation.success ? "success" : "warning"}>
-                  {workflowInvestigation.success ? "Analyzed" : "Inconclusive"}
+                <Badge tone={investigation.report?.root_cause ? "success" : "warning"}>
+                  {investigation.report?.root_cause ? <><CheckCircle2 size={12} /> Root cause identified</> : <><AlertTriangle size={12} /> Inconclusive</>}
                 </Badge>
               }
             >
-              {workflowInvestigation.stdout && (
-                <pre className="code-block" style={{ maxHeight: 400, overflow: "auto", fontSize: 12 }}>
-                  {workflowInvestigation.stdout}
-                </pre>
+              {investigation.report?.root_cause && (
+                <div style={{ padding: "var(--space-3)", border: "2px solid var(--primary)", borderRadius: 6, background: "var(--bg-muted)", marginBottom: "var(--space-3)" }}>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: "var(--space-1)", fontWeight: 500 }}>Root Cause</div>
+                  <div style={{ fontSize: 13, lineHeight: 1.5 }}>{investigation.report.root_cause}</div>
+                </div>
+              )}
+
+              {investigation.run.head_sha && (
+                <div style={{ padding: "var(--space-3)", border: "2px solid var(--primary)", borderRadius: 6, background: "var(--bg-muted)", marginBottom: "var(--space-3)" }}>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: "var(--space-1)", display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+                    <GitCommit size={13} /> Suspected change-point commit
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+                    <code style={{ fontSize: 13, fontWeight: 600 }}>{investigation.run.head_sha?.substring(0, 7)}</code>
+                  </div>
+                  <div style={{ marginTop: "var(--space-2)" }}>
+                    <a href={investigation.run.html_url} target="_blank" rel="noreferrer" className="btn btn--ghost btn--sm">
+                      <ExternalLink size={12} /> View on GitHub
+                    </a>
+                  </div>
+                </div>
+              )}
+
+              {investigation.report?.report_md && (
+                <details className="raw-output" open>
+                  <summary><ChevronDown size={14} style={{ verticalAlign: "middle" }} /> Full investigation</summary>
+                  <pre className="code-block" style={{ fontSize: 12 }}>{investigation.report.report_md}</pre>
+                </details>
+              )}
+
+              {investigation.stdout && (
+                <details className="raw-output">
+                  <summary><ChevronDown size={14} style={{ verticalAlign: "middle" }} /> Raw CLI output</summary>
+                  <pre className="code-block" style={{ fontSize: 11 }}>{investigation.stdout}</pre>
+                </details>
               )}
             </Card>
           </div>
@@ -360,32 +543,17 @@ export default function GitHub() {
           </thead>
           <tbody>
             {issues.slice(0, 50).map((i) => {
-              const stateInfo = getIssueState(i);
-              const Icon = stateInfo.icon;
+              const si = getIssueState(i);
+              const Icon = si.icon;
               return (
                 <tr key={i.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                  <td style={{ padding: "var(--space-2)", fontFamily: "monospace", color: "var(--primary)" }}>
-                    #{i.number}
-                  </td>
-                  <td style={{ padding: "var(--space-2)", maxWidth: 400, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {i.title}
-                  </td>
+                  <td style={{ padding: "var(--space-2)", fontFamily: "monospace", color: "var(--primary)" }}>#{i.number}</td>
+                  <td style={{ padding: "var(--space-2)", maxWidth: 400, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{i.title}</td>
+                  <td style={{ padding: "var(--space-2)" }}><Badge tone={si.tone}><Icon size={12} /> {si.label}</Badge></td>
+                  <td style={{ padding: "var(--space-2)" }}><User size={14} style={{ marginRight: 4, verticalAlign: "middle" }} />{i.user?.login || "—"}</td>
+                  <td style={{ padding: "var(--space-2)", whiteSpace: "nowrap", color: "var(--muted)" }}>{formatDate(i.updated_at)}</td>
                   <td style={{ padding: "var(--space-2)" }}>
-                    <Badge tone={stateInfo.tone}>
-                      <Icon size={12} /> {stateInfo.label}
-                    </Badge>
-                  </td>
-                  <td style={{ padding: "var(--space-2)" }}>
-                    <User size={14} style={{ marginRight: 4, verticalAlign: "middle" }} />
-                    {i.user?.login || "—"}
-                  </td>
-                  <td style={{ padding: "var(--space-2)", whiteSpace: "nowrap", color: "var(--muted)" }}>
-                    {formatDate(i.updated_at)}
-                  </td>
-                  <td style={{ padding: "var(--space-2)" }}>
-                    <a href={i.html_url} target="_blank" rel="noreferrer" className="btn btn--ghost btn--sm" style={{ padding: "var(--space-1)" }}>
-                      <ExternalLink size={12} />
-                    </a>
+                    <a href={i.html_url} target="_blank" rel="noreferrer" className="btn btn--ghost btn--sm" style={{ padding: "var(--space-1)" }}><ExternalLink size={12} /></a>
                   </td>
                 </tr>
               );
@@ -396,161 +564,102 @@ export default function GitHub() {
     );
   };
 
-  const renderCorrelation = () => {
-    return (
-      <div>
-        <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "flex-end", marginBottom: "var(--space-4)", flexWrap: "wrap" }}>
-          <div>
-            <label className="text-muted" style={{ fontSize: 12, display: "block", marginBottom: "var(--space-1)" }}>
-              Incident start (UTC)
-            </label>
-            <input
-              type="datetime-local"
-              value={incidentStart}
-              onChange={(e) => setIncidentStart(e.target.value)}
-              style={{ width: 220 }}
-            />
-          </div>
-          <button
-            onClick={loadCorrelation}
-            className="btn btn--primary btn--sm"
-            disabled={correlationLoading}
-          >
-            {correlationLoading ? (
-              <><Loader2 size={14} className="btn__spinner" /> Correlating…</>
-            ) : (
-              <><Search size={14} /> Find change-point</>
-            )}
-          </button>
+  const renderCorrelation = () => (
+    <div>
+      <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "flex-end", marginBottom: "var(--space-4)", flexWrap: "wrap" }}>
+        <div>
+          <label className="text-muted" style={{ fontSize: 12, display: "block", marginBottom: "var(--space-1)" }}>Incident start (UTC)</label>
+          <input type="datetime-local" value={incidentStart} onChange={(e) => setIncidentStart(e.target.value)} style={{ width: 220 }} />
         </div>
-
-        {correlationError && (
-          <div className="alert alert--danger" style={{ marginBottom: "var(--space-4)" }}>
-            {correlationError}
-          </div>
-        )}
-
-        {correlationResult && (
-          <div style={{ display: "grid", gap: "var(--space-3)" }}>
-            {correlationResult.no_commit_found ? (
-              <div style={{
-                padding: "var(--space-3)",
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-                background: "var(--bg-muted)",
-              }}>
-                <div style={{ fontWeight: 600, marginBottom: "var(--space-1)" }}>
-                  No commit found before incident
-                </div>
-                <div style={{ fontSize: 13, color: "var(--muted)" }}>
-                  The incident start ({correlationResult.incident_start || "not specified"}) predates all commits on
-                  branch <code>{correlationResult.branch || "default"}</code>. Attribution is inconclusive — the incident may
-                  pre-date the deploy history, or no deploy was performed before the incident.
-                </div>
-              </div>
-            ) : correlationResult.suspected_commit ? (
-              <>
-                <div style={{
-                  padding: "var(--space-3)",
-                  border: "2px solid var(--primary)",
-                  borderRadius: 6,
-                  background: "var(--bg-muted)",
-                }}>
-                  <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: "var(--space-1)" }}>
-                    Suspected change-point commit
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
-                    <code style={{ fontSize: 13, fontWeight: 600 }}>
-                      {correlationResult.suspected_commit.sha?.substring(0, 7)}
-                    </code>
-                    <span style={{ fontSize: 13 }}>
-                      {correlationResult.suspected_commit.message}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: "var(--space-1)", display: "flex", gap: "var(--space-3)" }}>
-                    <span><User size={12} style={{ verticalAlign: "middle" }} /> {correlationResult.suspected_commit.author || "—"}</span>
-                    <span>{formatDate(correlationResult.suspected_commit.date)}</span>
-                  </div>
-                  <div style={{ marginTop: "var(--space-2)" }}>
-                    <a
-                      href={`https://github.com/${correlationResult.repo || ""}/commit/${correlationResult.suspected_commit.sha}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="btn btn--ghost btn--sm"
-                    >
-                      <ExternalLink size={12} /> View on GitHub
-                    </a>
-                  </div>
-                </div>
-
-                {correlationResult.window_before_incident?.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: "var(--space-1)" }}>
-                      Commits before incident
-                    </div>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                      <thead>
-                        <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                          <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Commit</th>
-                          <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Message</th>
-                          <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Author</th>
-                          <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Date</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {correlationResult.window_before_incident.map((c) => (
-                          <tr key={c.sha} style={{ borderBottom: "1px solid var(--border)" }}>
-                            <td style={{ padding: "var(--space-2)", fontFamily: "monospace", fontSize: 12 }}>
-                              {c.sha?.substring(0, 7)}
-                            </td>
-                            <td style={{ padding: "var(--space-2)", maxWidth: 400, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                              {c.message}
-                            </td>
-                            <td style={{ padding: "var(--space-2)" }}>
-                              <User size={12} style={{ marginRight: 4, verticalAlign: "middle" }} />
-                              {c.author || "—"}
-                            </td>
-                            <td style={{ padding: "var(--space-2)", whiteSpace: "nowrap", color: "var(--muted)" }}>
-                              {formatDate(c.date)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div style={{ padding: "var(--space-3)", fontSize: 13, color: "var(--muted)" }}>
-                No result returned from correlation service.
-              </div>
-            )}
-          </div>
-        )}
-
-        {!correlationResult && !correlationError && !correlationLoading && (
-          <div className="empty-state" style={{ padding: "var(--space-6) 0" }}>
-            <Search size={26} />
-            <div>
-              <strong>Correlate an incident with git history</strong>
-              <p style={{ marginTop: "var(--space-1)", maxWidth: 420, fontSize: 13 }}>
-                Enter the incident start time and click "Find change-point" to identify
-                which commit was likely deployed before the incident began.
-              </p>
-            </div>
-          </div>
-        )}
+        <button onClick={loadCorrelation} className="btn btn--primary btn--sm" disabled={correlationLoading}>
+          {correlationLoading ? <><Loader2 size={14} className="btn__spinner" /> Correlating…</> : <><Search size={14} /> Find change-point</>}
+        </button>
       </div>
-    );
-  };
+
+      {correlationError && <div className="alert alert--danger" style={{ marginBottom: "var(--space-4)" }}>{correlationError}</div>}
+
+      {correlationResult && (
+        <div style={{ display: "grid", gap: "var(--space-3)" }}>
+          {correlationResult.no_commit_found ? (
+            <div style={{ padding: "var(--space-3)", border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg-muted)" }}>
+              <div style={{ fontWeight: 600, marginBottom: "var(--space-1)" }}>No commit found before incident</div>
+              <div style={{ fontSize: 13, color: "var(--muted)" }}>
+                The incident start ({correlationResult.incident_start || "not specified"}) predates all commits on
+                branch <code>{correlationResult.branch || "default"}</code>. Attribution is inconclusive.
+              </div>
+            </div>
+          ) : correlationResult.suspected_commit ? (
+            <>
+              <div style={{ padding: "var(--space-3)", border: "2px solid var(--primary)", borderRadius: 6, background: "var(--bg-muted)" }}>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: "var(--space-1)" }}>Suspected change-point commit</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+                  <code style={{ fontSize: 13, fontWeight: 600 }}>{correlationResult.suspected_commit.sha?.substring(0, 7)}</code>
+                  <span style={{ fontSize: 13 }}>{correlationResult.suspected_commit.message}</span>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: "var(--space-1)", display: "flex", gap: "var(--space-3)" }}>
+                  <span><User size={12} style={{ verticalAlign: "middle" }} /> {correlationResult.suspected_commit.author || "—"}</span>
+                  <span>{formatDate(correlationResult.suspected_commit.date)}</span>
+                </div>
+                <div style={{ marginTop: "var(--space-2)" }}>
+                  <a href={`https://github.com/${correlationResult.repo || ""}/commit/${correlationResult.suspected_commit.sha}`} target="_blank" rel="noreferrer" className="btn btn--ghost btn--sm">
+                    <ExternalLink size={12} /> View on GitHub
+                  </a>
+                </div>
+              </div>
+
+              {correlationResult.window_before_incident?.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: "var(--space-1)" }}>Commits before incident</div>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                        <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Commit</th>
+                        <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Message</th>
+                        <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Author</th>
+                        <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {correlationResult.window_before_incident.map((c) => (
+                        <tr key={c.sha} style={{ borderBottom: "1px solid var(--border)" }}>
+                          <td style={{ padding: "var(--space-2)", fontFamily: "monospace", fontSize: 12 }}>{c.sha?.substring(0, 7)}</td>
+                          <td style={{ padding: "var(--space-2)", maxWidth: 400, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.message}</td>
+                          <td style={{ padding: "var(--space-2)" }}><User size={12} style={{ marginRight: 4, verticalAlign: "middle" }} />{c.author || "—"}</td>
+                          <td style={{ padding: "var(--space-2)", whiteSpace: "nowrap", color: "var(--muted)" }}>{formatDate(c.date)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ padding: "var(--space-3)", fontSize: 13, color: "var(--muted)" }}>No result returned from correlation service.</div>
+          )}
+        </div>
+      )}
+
+      {!correlationResult && !correlationError && !correlationLoading && (
+        <div className="empty-state" style={{ padding: "var(--space-6) 0" }}>
+          <Search size={26} />
+          <div>
+            <strong>Correlate an incident with git history</strong>
+            <p style={{ marginTop: "var(--space-1)", maxWidth: 420, fontSize: 13 }}>
+              Enter the incident start time and click "Find change-point" to identify which commit was likely deployed before the incident began.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <>
       <div className="page-head">
         <div>
-          <h1>GitHub Integration</h1>
+          <h1>GitHub & CI/CD</h1>
           <p className="page-head__sub">
-            Track repository changes, workflows, and issues for incident correlation
+            Repository changes, workflow pipelines, and incident correlation
           </p>
         </div>
       </div>
@@ -561,21 +670,13 @@ export default function GitHub() {
           subtitle={repoInfo ? `Repository: ${repoInfo.full_name}` : "Configure GITHUB_TOKEN and GITHUB_REPO"}
           actions={
             <Badge tone={tone}>
-              {checking ? (
-                <Loader2 size={12} className="btn__spinner" />
-              ) : tone === "success" ? (
-                <CheckCircle2 size={12} />
-              ) : (
-                <XCircle size={12} />
-              )}
+              {checking ? <Loader2 size={12} className="btn__spinner" /> : tone === "success" ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
               {checking ? "Checking…" : label}
             </Badge>
           }
         >
           <div className="row">
-            <div className="health-item__icon">
-              <GitBranch size={17} strokeWidth={1.8} />
-            </div>
+            <div className="health-item__icon"><GitBranch size={17} strokeWidth={1.8} /></div>
             <div>
               {repoInfo && (
                 <>
@@ -598,56 +699,28 @@ export default function GitHub() {
           <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", alignItems: "flex-end" }}>
             {branches.length > 0 && (
               <div>
-                <label className="text-muted" style={{ fontSize: 12, display: "block", marginBottom: "var(--space-1)" }}>
-                  Branch
-                </label>
-                <select
-                  value={selectedBranch}
-                  onChange={(e) => setSelectedBranch(e.target.value)}
-                  style={{ padding: "var(--space-1) var(--space-2)", minWidth: 150 }}
-                >
-                  {branches.map((b) => (
-                    <option key={b} value={b}>{b}</option>
-                  ))}
+                <label className="text-muted" style={{ fontSize: 12, display: "block", marginBottom: "var(--space-1)" }}>Branch</label>
+                <select value={selectedBranch} onChange={(e) => setSelectedBranch(e.target.value)} style={{ padding: "var(--space-1) var(--space-2)", minWidth: 150 }}>
+                  {branches.map((b) => <option key={b} value={b}>{b}</option>)}
                 </select>
               </div>
             )}
             {activeTab === "commits" && (
               <>
                 <div>
-                  <label className="text-muted" style={{ fontSize: 12, display: "block", marginBottom: "var(--space-1)" }}>
-                    Since
-                  </label>
-                  <input
-                    type="datetime-local"
-                    value={since}
-                    onChange={(e) => setSince(e.target.value)}
-                    style={{ width: 200 }}
-                  />
+                  <label className="text-muted" style={{ fontSize: 12, display: "block", marginBottom: "var(--space-1)" }}>Since</label>
+                  <input type="datetime-local" value={since} onChange={(e) => setSince(e.target.value)} style={{ width: 200 }} />
                 </div>
                 <div>
-                  <label className="text-muted" style={{ fontSize: 12, display: "block", marginBottom: "var(--space-1)" }}>
-                    Until
-                  </label>
-                  <input
-                    type="datetime-local"
-                    value={until}
-                    onChange={(e) => setUntil(e.target.value)}
-                    style={{ width: 200 }}
-                  />
+                  <label className="text-muted" style={{ fontSize: 12, display: "block", marginBottom: "var(--space-1)" }}>Until</label>
+                  <input type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} style={{ width: 200 }} />
                 </div>
               </>
             )}
             {activeTab === "issues" && (
               <div>
-                <label className="text-muted" style={{ fontSize: 12, display: "block", marginBottom: "var(--space-1)" }}>
-                  Issue State
-                </label>
-                <select
-                  value={issueState}
-                  onChange={(e) => setIssueState(e.target.value)}
-                  style={{ padding: "var(--space-1) var(--space-2)" }}
-                >
+                <label className="text-muted" style={{ fontSize: 12, display: "block", marginBottom: "var(--space-1)" }}>Issue State</label>
+                <select value={issueState} onChange={(e) => setIssueState(e.target.value)} style={{ padding: "var(--space-1) var(--space-2)" }}>
                   <option value="open">Open</option>
                   <option value="closed">Closed</option>
                   <option value="all">All</option>
@@ -672,7 +745,7 @@ export default function GitHub() {
 
       <div style={{ marginTop: "var(--space-4)" }}>
         <div style={{ display: "flex", gap: "var(--space-1)", marginBottom: "var(--space-4)", borderBottom: "1px solid var(--border)", paddingBottom: "var(--space-2)" }}>
-          {TAB_CONFIG.map((tab) => {
+          {TABS.map((tab) => {
             const Icon = tab.icon;
             return (
               <button
@@ -687,11 +760,7 @@ export default function GitHub() {
           })}
         </div>
 
-        {error && (
-          <div className="alert alert--danger" style={{ marginBottom: "var(--space-4)" }}>
-            {error}
-          </div>
-        )}
+        {error && <div className="alert alert--danger" style={{ marginBottom: "var(--space-4)" }}>{error}</div>}
 
         <Card>
           {activeTab === "commits" && renderCommits()}
