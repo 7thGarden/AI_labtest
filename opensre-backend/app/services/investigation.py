@@ -590,6 +590,97 @@ def collect_target_evidence(target: str):
     }
 
 
+def collect_workflow_evidence(run_id: int):
+    """
+    Collect evidence for a GitHub Actions workflow run so OpenSRE can
+    investigate a failed pipeline. Gathers run details, job steps, and
+    the commit it ran against.
+    """
+    from app.services import github
+
+    run_result = github.get_workflow_run(run_id)
+    if not run_result.get("success"):
+        return {
+            "success": False,
+            "error": run_result.get("error", "Unable to fetch workflow run"),
+        }
+
+    run = run_result["data"]
+    head_sha = run.get("head_sha") or ""
+    conclusion = run.get("conclusion") or run.get("status") or "unknown"
+
+    evidence = {
+        "workflow_run": {
+            "id": run.get("id"),
+            "name": run.get("name"),
+            "branch": run.get("head_branch"),
+            "conclusion": conclusion,
+            "status": run.get("status"),
+            "head_sha": head_sha,
+            "html_url": run.get("html_url"),
+            "created_at": run.get("created_at"),
+            "updated_at": run.get("updated_at"),
+            "event": run.get("event"),
+        },
+        "jobs": [],
+        "git": git_correlation.correlate_commits(
+            incident_start=run.get("created_at"),
+            branch=run.get("head_branch"),
+        ),
+    }
+
+    jobs_result = github.get_workflow_run_jobs(run_id)
+    failed_steps = []
+
+    if jobs_result.get("success"):
+        for job in jobs_result.get("data") or []:
+            job_info = {
+                "name": job.get("name"),
+                "conclusion": job.get("conclusion"),
+                "status": job.get("status"),
+                "started_at": job.get("started_at"),
+                "completed_at": job.get("completed_at"),
+                "steps": [],
+            }
+            for step in job.get("steps") or []:
+                step_info = {
+                    "name": step.get("name"),
+                    "conclusion": step.get("conclusion"),
+                    "status": step.get("status"),
+                }
+                job_info["steps"].append(step_info)
+                if step.get("conclusion") == "failure":
+                    failed_steps.append(
+                        f"{job.get('name')} / {step.get('name')}"
+                    )
+            evidence["jobs"].append(job_info)
+
+    summary_lines = [
+        f"workflow: {run.get('name')} (run #{run_id})",
+        f"branch: {run.get('head_branch')}",
+        f"commit: {head_sha[:7]}",
+        f"conclusion: {conclusion}",
+        f"event: {run.get('event')}",
+    ]
+    if failed_steps:
+        summary_lines.append(f"failed steps: {'; '.join(failed_steps)}")
+
+    git_corr = evidence.get("git") or {}
+    suspected = git_corr.get("suspected_commit") or {}
+    if suspected.get("sha"):
+        summary_lines.append(
+            f"suspected change-point: {suspected['sha'][:7]} "
+            f"'{suspected.get('message', '')}'"
+        )
+
+    evidence["summary"] = "\n".join(summary_lines)
+
+    return {
+        "success": True,
+        "evidence": evidence,
+    }
+
+
 _ALERT_NAMESPACE_KEYS = (
     "namespace",
     "kubernetes_namespace_name",

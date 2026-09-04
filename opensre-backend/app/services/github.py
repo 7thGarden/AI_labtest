@@ -64,6 +64,18 @@ class GitHubClient:
             result["data"] = result["data"]["workflow_runs"]
         return result
 
+    def get_workflow_run(self, run_id: int):
+        return self._get(f"/actions/runs/{run_id}")
+
+    def get_workflow_run_jobs(self, run_id: int):
+        result = self._get(f"/actions/runs/{run_id}/jobs", {"per_page": 100})
+        if result["success"] and "jobs" in result["data"]:
+            result["data"] = result["data"]["jobs"]
+        return result
+
+    def get_workflow_run_logs(self, run_id: int, job_id: int):
+        return self._get(f"/actions/runs/{run_id}/jobs/{job_id}/logs")
+
     def get_issues(self, state: str = "open", limit: int = 30):
         params = {"state": state, "per_page": min(limit, 100), "page": 1, "sort": "updated", "direction": "desc"}
         result = self._get("/issues", params)
@@ -92,6 +104,18 @@ def get_commits(sha: str | None = None, since: str | None = None, until: str | N
 
 def get_workflow_runs(limit: int = 20):
     return github.get_workflow_runs(limit)
+
+
+def get_workflow_run(run_id: int):
+    return github.get_workflow_run(run_id)
+
+
+def get_workflow_run_jobs(run_id: int):
+    return github.get_workflow_run_jobs(run_id)
+
+
+def get_workflow_run_logs(run_id: int, job_id: int):
+    return github.get_workflow_run_logs(run_id, job_id)
 
 
 def get_issues(state: str = "open", limit: int = 30):
