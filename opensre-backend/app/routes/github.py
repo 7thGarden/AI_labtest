@@ -56,6 +56,12 @@ def get_repo_info():
     return github.get_repo_info()
 
 
+@router.get("/workflow-runs/{run_id}/jobs")
+def get_workflow_run_jobs(run_id: int):
+    """Fetch jobs for a workflow run, with log snippets for failed steps."""
+    return github.get_workflow_run_jobs_with_logs(run_id)
+
+
 @router.get("/workflow-runs/{run_id}/investigate")
 def investigate_workflow_run(run_id: int):
     """
