@@ -2,6 +2,8 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from app.services import github
+from app.services import investigation
+from app.services import opensre_cli
 
 router = APIRouter(
     prefix="/api/github",
@@ -52,3 +54,42 @@ def get_issues(
 @router.get("/repo")
 def get_repo_info():
     return github.get_repo_info()
+
+
+@router.get("/workflow-runs/{run_id}/investigate")
+def investigate_workflow_run(run_id: int):
+    """
+    Investigate a GitHub Actions workflow run. Collects run details, job
+    steps, and git correlation, then feeds the evidence to OpenSRE for
+    root-cause analysis.
+    """
+    evidence_result = investigation.collect_workflow_evidence(run_id)
+
+    if not evidence_result.get("success"):
+        return evidence_result
+
+    evidence = evidence_result["evidence"]
+
+    alert = {
+        "labels": {
+            "alertname": f"WorkflowFailed_{evidence['workflow_run']['name']}",
+            "severity": "warning",
+        },
+        "annotations": {
+            "summary": (
+                f"GitHub Actions workflow '{evidence['workflow_run']['name']}' "
+                f"concluded: {evidence['workflow_run']['conclusion']}"
+            ),
+            "description": evidence.get("summary", ""),
+        },
+        "startsAt": evidence["workflow_run"].get("created_at"),
+    }
+
+    payload = {
+        "status": "firing",
+        "labels": alert["labels"],
+        "annotations": alert["annotations"],
+        "startsAt": alert.get("startsAt"),
+    }
+
+    return opensre_cli.investigate(payload)

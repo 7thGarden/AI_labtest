@@ -42,6 +42,9 @@ export default function GitHub() {
   const [correlationResult, setCorrelationResult] = useState(null);
   const [correlationLoading, setCorrelationLoading] = useState(false);
   const [correlationError, setCorrelationError] = useState(null);
+  const [workflowInvestigation, setWorkflowInvestigation] = useState(null);
+  const [workflowInvestigating, setWorkflowInvestigating] = useState(false);
+  const [workflowInvestError, setWorkflowInvestError] = useState(null);
 
   useEffect(() => {
     async function load() {
@@ -137,6 +140,30 @@ export default function GitHub() {
     }
   };
 
+  const investigateWorkflow = async (run) => {
+    setWorkflowInvestigating(true);
+    setWorkflowInvestigation(null);
+    setWorkflowInvestError(null);
+    try {
+      const res = await api.get(`/github/workflow-runs/${run.id}/investigate`);
+      const data = res.data;
+      if (!data.success) {
+        setWorkflowInvestError(data.stderr || data.error || "Investigation failed");
+      } else {
+        const stdout = data.stdout || "";
+        setWorkflowInvestigation({
+          run,
+          stdout,
+          success: data.success,
+        });
+      }
+    } catch (e) {
+      setWorkflowInvestError(e.message);
+    } finally {
+      setWorkflowInvestigating(false);
+    }
+  };
+
   useEffect(() => {
     if (status === "connected" && selectedBranch) {
       if (activeTab === "commits") loadCommits(selectedBranch);
@@ -227,47 +254,90 @@ export default function GitHub() {
     if (loading.workflows) return <div className="loading"><Loader2 size={16} className="btn__spinner" /> Loading workflows…</div>;
     if (!workflows.length) return <div className="empty">No workflow runs found</div>;
     return (
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead>
-            <tr style={{ borderBottom: "1px solid var(--border)" }}>
-              <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Workflow</th>
-              <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Branch</th>
-              <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Event</th>
-              <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Status</th>
-              <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Started</th>
-              <th style={{ textAlign: "left", padding: "var(--space-2)", width: 40 }}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {workflows.slice(0, 50).map((w) => {
-              const statusInfo = getWorkflowStatus(w);
-              const Icon = statusInfo.icon;
-              return (
-                <tr key={w.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                  <td style={{ padding: "var(--space-2)", fontWeight: 500 }}>{w.name}</td>
-                  <td style={{ padding: "var(--space-2)", fontFamily: "monospace", fontSize: 12 }}>
-                    {w.head_branch}
-                  </td>
-                  <td style={{ padding: "var(--space-2)", textTransform: "capitalize" }}>{w.event}</td>
-                  <td style={{ padding: "var(--space-2)" }}>
-                    <Badge tone={statusInfo.tone}>
-                      <Icon size={12} /> {statusInfo.label}
-                    </Badge>
-                  </td>
-                  <td style={{ padding: "var(--space-2)", whiteSpace: "nowrap", color: "var(--muted)" }}>
-                    {formatDate(w.run_started_at)}
-                  </td>
-                  <td style={{ padding: "var(--space-2)" }}>
-                    <a href={w.html_url} target="_blank" rel="noreferrer" className="btn btn--ghost btn--sm" style={{ padding: "var(--space-1)" }}>
-                      <ExternalLink size={12} />
-                    </a>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Workflow</th>
+                <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Branch</th>
+                <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Event</th>
+                <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Status</th>
+                <th style={{ textAlign: "left", padding: "var(--space-2)" }}>Started</th>
+                <th style={{ textAlign: "left", padding: "var(--space-2)", width: 80 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {workflows.slice(0, 50).map((w) => {
+                const statusInfo = getWorkflowStatus(w);
+                const Icon = statusInfo.icon;
+                const isFailed = w.conclusion === "failure";
+                return (
+                  <tr key={w.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td style={{ padding: "var(--space-2)", fontWeight: 500 }}>{w.name}</td>
+                    <td style={{ padding: "var(--space-2)", fontFamily: "monospace", fontSize: 12 }}>
+                      {w.head_branch}
+                    </td>
+                    <td style={{ padding: "var(--space-2)", textTransform: "capitalize" }}>{w.event}</td>
+                    <td style={{ padding: "var(--space-2)" }}>
+                      <Badge tone={statusInfo.tone}>
+                        <Icon size={12} /> {statusInfo.label}
+                      </Badge>
+                    </td>
+                    <td style={{ padding: "var(--space-2)", whiteSpace: "nowrap", color: "var(--muted)" }}>
+                      {formatDate(w.run_started_at)}
+                    </td>
+                    <td style={{ padding: "var(--space-2)", display: "flex", gap: "var(--space-1)" }}>
+                      {isFailed && (
+                        <button
+                          className="btn btn--ghost btn--sm"
+                          style={{ padding: "var(--space-1)" }}
+                          onClick={() => investigateWorkflow(w)}
+                          disabled={workflowInvestigating}
+                        >
+                          {workflowInvestigating && workflowInvestigation?.run?.id === w.id ? (
+                            <Loader2 size={12} className="btn__spinner" />
+                          ) : (
+                            <Search size={12} />
+                          )}
+                        </button>
+                      )}
+                      <a href={w.html_url} target="_blank" rel="noreferrer" className="btn btn--ghost btn--sm" style={{ padding: "var(--space-1)" }}>
+                        <ExternalLink size={12} />
+                      </a>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {workflowInvestError && (
+          <div className="alert alert--danger" style={{ marginTop: "var(--space-3)" }}>
+            {workflowInvestError}
+          </div>
+        )}
+
+        {workflowInvestigation && (
+          <div style={{ marginTop: "var(--space-4)" }}>
+            <Card
+              title="Investigation report"
+              subtitle={`Run #${workflowInvestigation.run.id} · ${workflowInvestigation.run.name} · ${workflowInvestigation.run.conclusion}`}
+              actions={
+                <Badge tone={workflowInvestigation.success ? "success" : "warning"}>
+                  {workflowInvestigation.success ? "Analyzed" : "Inconclusive"}
+                </Badge>
+              }
+            >
+              {workflowInvestigation.stdout && (
+                <pre className="code-block" style={{ maxHeight: 400, overflow: "auto", fontSize: 12 }}>
+                  {workflowInvestigation.stdout}
+                </pre>
+              )}
+            </Card>
+          </div>
+        )}
       </div>
     );
   };
