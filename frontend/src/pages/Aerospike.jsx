@@ -8,9 +8,12 @@ import {
   XCircle,
   Loader2,
   Plus,
-  Search,
   Trash2,
   List,
+  Target,
+  Zap,
+  RotateCcw,
+  Search,
 } from "lucide-react";
 
 const NAMESPACE = "test";
@@ -24,6 +27,15 @@ export default function Aerospike() {
   const [newRecord, setNewRecord] = useState({ key: "", bins: { name: "", value: "" } });
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
+
+  // --- Demo staged flow ---
+  const [demoPhase, setDemoPhase] = useState("idle");
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [demoSeed, setDemoSeed] = useState(null);
+  const [demoFault, setDemoFault] = useState(null);
+  const [demoInvestigation, setDemoInvestigation] = useState(null);
+  const [demoRecovery, setDemoRecovery] = useState(null);
+  const [demoError, setDemoError] = useState(null);
 
   useEffect(() => {
     async function load() {
@@ -114,7 +126,76 @@ export default function Aerospike() {
       ? "Unreachable"
       : status === "backend-offline"
       ? "Backend offline"
-      : "Checking…";
+      : "Checking\u2026";
+
+  // --- Demo handlers ---
+  const handleFail = async () => {
+    setDemoLoading(true);
+    setDemoError(null);
+    setDemoInvestigation(null);
+    setDemoRecovery(null);
+    try {
+      const res = await api.post("/demo/db-failure/fail", { target: "aerospike" });
+      if (res.data.success) {
+        setDemoPhase("failed");
+        setDemoSeed(res.data.seed);
+        setDemoFault(res.data.fault);
+        setStatus("unreachable");
+      } else {
+        setDemoError(res.data.error || "Failed to inject fault");
+      }
+    } catch (e) {
+      setDemoError(e.message);
+    } finally {
+      setDemoLoading(false);
+    }
+  };
+
+  const handleInvestigate = async () => {
+    setDemoLoading(true);
+    setDemoError(null);
+    try {
+      const res = await api.post("/demo/db-failure/investigate", { target: "aerospike" });
+      if (res.data.success) {
+        setDemoPhase("investigated");
+        setDemoInvestigation(res.data.opensre);
+      } else {
+        setDemoError(res.data.error || "Investigation failed");
+      }
+    } catch (e) {
+      setDemoError(e.message);
+    } finally {
+      setDemoLoading(false);
+    }
+  };
+
+  const handleRecover = async () => {
+    setDemoLoading(true);
+    setDemoError(null);
+    try {
+      const res = await api.post("/demo/db-failure/recover", { target: "aerospike" });
+      if (res.data.success) {
+        setDemoPhase("recovered");
+        setDemoRecovery(res.data.recovery);
+        setTimeout(() => setStatus("connected"), 2000);
+      } else {
+        setDemoError(res.data.error || "Recovery failed");
+      }
+    } catch (e) {
+      setDemoError(e.message);
+    } finally {
+      setDemoLoading(false);
+    }
+  };
+
+  const handleReset = () => {
+    setDemoPhase("idle");
+    setDemoSeed(null);
+    setDemoFault(null);
+    setDemoInvestigation(null);
+    setDemoRecovery(null);
+    setDemoError(null);
+  };
 
   return (
     <>
@@ -122,7 +203,7 @@ export default function Aerospike() {
         <div>
           <h1>Aerospike</h1>
           <p className="page-head__sub">
-            High-performance NoSQL database · key-value operations
+            High-performance NoSQL database \u00b7 key-value operations
           </p>
         </div>
       </div>
@@ -130,7 +211,7 @@ export default function Aerospike() {
       <div className="grid-2">
         <Card
           title="Connection"
-          subtitle={`Namespace: ${NAMESPACE} · Set: ${SET_NAME}`}
+          subtitle={`Namespace: ${NAMESPACE} \u00b7 Set: ${SET_NAME}`}
           actions={
             <Badge tone={tone}>
               {checking ? (
@@ -140,7 +221,7 @@ export default function Aerospike() {
               ) : (
                 <XCircle size={12} />
               )}
-              {checking ? "Checking…" : label}
+              {checking ? "Checking\u2026" : label}
             </Badge>
           }
         >
@@ -150,7 +231,7 @@ export default function Aerospike() {
             </div>
             <div>
               <div className="text-muted" style={{ fontSize: 13 }}>
-                Aerospike server: localhost:3000
+                Aerospike server: localhost:3001
               </div>
             </div>
           </div>
@@ -211,7 +292,7 @@ export default function Aerospike() {
                 {loadingRecords ? (
                   <tr>
                     <td colSpan={3} style={{ padding: "var(--space-4)", textAlign: "center" }}>
-                      <Loader2 size={16} className="btn__spinner" /> Loading…
+                      <Loader2 size={16} className="btn__spinner" /> Loading\u2026
                     </td>
                   </tr>
                 ) : records.length === 0 ? (
@@ -246,6 +327,111 @@ export default function Aerospike() {
           </div>
         </Card>
       </div>
+
+      {/* ---- Database failure demo (staged flow) ---- */}
+      <Card
+        title="Database failure demo"
+        subtitle={
+          demoPhase === "idle"
+            ? "Step 1: Seed instance records and stop the database"
+            : demoPhase === "failed"
+            ? "Step 2: Database is DOWN \u2014 run OpenSRE investigation"
+            : demoPhase === "investigated"
+            ? "Step 3: RCA collected \u2014 recover the database"
+            : "Done \u2014 database recovered"
+        }
+        actions={
+          demoPhase === "idle" ? (
+            <button className="btn btn--primary" onClick={handleFail} disabled={demoLoading}>
+              {demoLoading ? <Loader2 size={15} className="btn__spinner" /> : <Zap size={15} />}
+              {" "}1. Create & fail instance
+            </button>
+          ) : demoPhase === "failed" ? (
+            <button className="btn btn--primary" onClick={handleInvestigate} disabled={demoLoading}>
+              {demoLoading ? <Loader2 size={15} className="btn__spinner" /> : <Search size={15} />}
+              {" "}2. Investigate with OpenSRE
+            </button>
+          ) : demoPhase === "investigated" ? (
+            <button className="btn btn--primary" onClick={handleRecover} disabled={demoLoading}>
+              {demoLoading ? <Loader2 size={15} className="btn__spinner" /> : <RotateCcw size={15} />}
+              {" "}3. Recover
+            </button>
+          ) : (
+            <button className="btn btn--ghost btn--sm" onClick={handleReset}>
+              Reset demo
+            </button>
+          )
+        }
+      >
+        {demoError && (
+          <div className="alert alert--danger" style={{ marginBottom: "var(--space-3)" }}>
+            {demoError}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", marginBottom: "var(--space-3)" }}>
+          <Badge tone={demoPhase === "idle" ? "info" : demoPhase !== "idle" ? "success" : "info"}>
+            {demoPhase === "idle" ? "Waiting" : "Seeded"}
+          </Badge>
+          <Badge tone={demoPhase === "failed" || demoPhase === "investigated" || demoPhase === "recovered" ? "danger" : "info"}>
+            {demoPhase === "failed" || demoPhase === "investigated" || demoPhase === "recovered" ? "DOWN" : "Healthy"}
+          </Badge>
+          {demoPhase === "investigated" && <Badge tone="success">RCA ready</Badge>}
+          {demoPhase === "recovered" && <Badge tone="success">Recovered</Badge>}
+        </div>
+
+        {demoSeed && (
+          <div style={{ marginBottom: "var(--space-3)", fontSize: 13 }}>
+            <strong>Seeded:</strong> {demoSeed.inserted?.join(", ") || "\u2014"}
+          </div>
+        )}
+
+        {demoFault && (
+          <div style={{ marginBottom: "var(--space-3)", fontSize: 13 }}>
+            <strong>Fault:</strong>{" "}
+            <Badge tone="danger">{demoFault.action}</Badge>
+            <span className="text-muted" style={{ marginLeft: "var(--space-2)" }}>
+              container {demoFault.container_stopped} stopped
+            </span>
+          </div>
+        )}
+
+        {demoRecovery && (
+          <div style={{ marginBottom: "var(--space-3)", fontSize: 13 }}>
+            <strong>Recovery:</strong>{" "}
+            <Badge tone="success">{demoRecovery.action}</Badge>
+            <span className="text-muted" style={{ marginLeft: "var(--space-2)" }}>
+              container {demoRecovery.container_restarted} restarted
+            </span>
+          </div>
+        )}
+
+        {demoInvestigation && (
+          <div style={{
+            padding: "var(--space-3)",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            background: "var(--bg-muted)",
+            marginTop: "var(--space-3)",
+          }}>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: "var(--space-2)", display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+              <Target size={13} /> OpenSRE Investigation Result
+            </div>
+            <pre style={{
+              fontFamily: "monospace",
+              fontSize: 12,
+              whiteSpace: "pre-wrap",
+              maxHeight: 350,
+              overflow: "auto",
+              background: "var(--bg-tertiary)",
+              borderRadius: "var(--radius-sm)",
+              padding: "var(--space-3)",
+            }}>
+              {demoInvestigation.stdout || demoInvestigation.stderr || "No output"}
+            </pre>
+          </div>
+        )}
+      </Card>
     </>
   );
 }

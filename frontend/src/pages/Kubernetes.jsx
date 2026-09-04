@@ -15,6 +15,9 @@ import {
   CheckCircle2,
   Terminal,
   FileText,
+  Zap,
+  RotateCcw,
+  Target,
 } from "lucide-react";
 
 export default function Kubernetes() {
@@ -26,6 +29,22 @@ export default function Kubernetes() {
   const [selectedPod, setSelectedPod] = useState(null);
   const [investigation, setInvestigation] = useState(null);
   const [investigating, setInvestigating] = useState(false);
+
+  // --- Node failure demo ---
+  const [nodeDemoPhase, setNodeDemoPhase] = useState("idle");
+  const [nodeDemoLoading, setNodeDemoLoading] = useState(false);
+  const [nodeDemoFault, setNodeDemoFault] = useState(null);
+  const [nodeDemoInvestigation, setNodeDemoInvestigation] = useState(null);
+  const [nodeDemoRecovery, setNodeDemoRecovery] = useState(null);
+  const [nodeDemoError, setNodeDemoError] = useState(null);
+
+  // --- Unhealthy pod demo ---
+  const [podDemoPhase, setPodDemoPhase] = useState("idle");
+  const [podDemoLoading, setPodDemoLoading] = useState(false);
+  const [podDemoFault, setPodDemoFault] = useState(null);
+  const [podDemoInvestigation, setPodDemoInvestigation] = useState(null);
+  const [podDemoRecovery, setPodDemoRecovery] = useState(null);
+  const [podDemoError, setPodDemoError] = useState(null);
 
   const load = useCallback(async () => {
     const [nodeRes, podRes] = await Promise.all([
@@ -106,6 +125,198 @@ export default function Kubernetes() {
       setInvestigating(false);
     }
   }
+
+  // --- Node failure demo handlers ---
+  const handleNodeFail = async () => {
+    setNodeDemoLoading(true);
+    setNodeDemoError(null);
+    setNodeDemoInvestigation(null);
+    setNodeDemoRecovery(null);
+    try {
+      const res = await api.post("/demo/node-failure/fail", {
+        node: "opensre-demo-worker",
+        context: "kind-opensre-demo",
+      });
+      if (res.data.success) {
+        setNodeDemoPhase("failed");
+        setNodeDemoFault(res.data.fault);
+        load().then(({ nodes: nl, pods: pl }) => {
+          setNodes(nl);
+          setPods(pl);
+        });
+      } else {
+        setNodeDemoError("Failed to inject fault");
+      }
+    } catch (e) {
+      setNodeDemoError(e.message);
+    } finally {
+      setNodeDemoLoading(false);
+    }
+  };
+
+  const handleNodeRefail = async () => {
+    setNodeDemoLoading(true);
+    setNodeDemoError(null);
+    setNodeDemoInvestigation(null);
+    setNodeDemoRecovery(null);
+    try {
+      const res = await api.post("/demo/node-failure/re-fail", {
+        node: "opensre-demo-worker",
+        context: "kind-opensre-demo",
+      });
+      if (res.data.success) {
+        setNodeDemoPhase("failed");
+        setNodeDemoFault(res.data.fault);
+        load().then(({ nodes: nl, pods: pl }) => {
+          setNodes(nl);
+          setPods(pl);
+        });
+      } else {
+        setNodeDemoError("Failed to re-fail node");
+      }
+    } catch (e) {
+      setNodeDemoError(e.message);
+    } finally {
+      setNodeDemoLoading(false);
+    }
+  };
+
+  const handleNodeInvestigate = async () => {
+    setNodeDemoLoading(true);
+    setNodeDemoError(null);
+    try {
+      const res = await api.post("/demo/node-failure/investigate", {
+        node: "opensre-demo-worker",
+        context: "kind-opensre-demo",
+      });
+      if (res.data.success) {
+        setNodeDemoPhase("investigated");
+        setNodeDemoInvestigation(res.data.opensre);
+      } else {
+        setNodeDemoError("Investigation failed");
+      }
+    } catch (e) {
+      setNodeDemoError(e.message);
+    } finally {
+      setNodeDemoLoading(false);
+    }
+  };
+
+  const handleNodeRecover = async () => {
+    setNodeDemoLoading(true);
+    setNodeDemoError(null);
+    try {
+      const res = await api.post("/demo/node-failure/recover", {
+        node: "opensre-demo-worker",
+        context: "kind-opensre-demo",
+      });
+      if (res.data.success) {
+        setNodeDemoPhase("recovered");
+        setNodeDemoRecovery(res.data.recovery);
+        setTimeout(() => {
+          load().then(({ nodes: nl, pods: pl }) => {
+            setNodes(nl);
+            setPods(pl);
+          });
+        }, 2000);
+      } else {
+        setNodeDemoError("Recovery failed");
+      }
+    } catch (e) {
+      setNodeDemoError(e.message);
+    } finally {
+      setNodeDemoLoading(false);
+    }
+  };
+
+  const handleNodeReset = () => {
+    setNodeDemoPhase("idle");
+    setNodeDemoFault(null);
+    setNodeDemoInvestigation(null);
+    setNodeDemoRecovery(null);
+    setNodeDemoError(null);
+    load().then(({ nodes: nl, pods: pl }) => {
+      setNodes(nl);
+      setPods(pl);
+    });
+  };
+
+  // --- Unhealthy pod demo handlers ---
+
+  const handlePodDeploy = async () => {
+    setPodDemoLoading(true);
+    setPodDemoError(null);
+    try {
+      const res = await api.post("/demo/unhealthy-pod/deploy");
+      if (res.data.success) {
+        setPodDemoPhase("deployed");
+        setPodDemoFault({ pod: res.data.pod, namespace: res.data.namespace });
+        load().then(({ nodes: nl, pods: pl }) => {
+          setNodes(nl);
+          setPods(pl);
+        });
+      } else {
+        setPodDemoError("Failed to deploy unhealthy pod");
+      }
+    } catch (e) {
+      setPodDemoError(e.message);
+    } finally {
+      setPodDemoLoading(false);
+    }
+  };
+
+  const handlePodInvestigate = async () => {
+    setPodDemoLoading(true);
+    setPodDemoError(null);
+    try {
+      const res = await api.post("/demo/node-failure/investigate", {
+        node: "opensre-demo-worker",
+        context: "kind-opensre-demo",
+      });
+      if (res.data.success) {
+        setPodDemoPhase("investigated");
+        setPodDemoInvestigation(res.data.opensre);
+      } else {
+        setPodDemoError("Investigation failed");
+      }
+    } catch (e) {
+      setPodDemoError(e.message);
+    } finally {
+      setPodDemoLoading(false);
+    }
+  };
+
+  const handlePodRecover = async () => {
+    setPodDemoLoading(true);
+    setPodDemoError(null);
+    try {
+      const res = await api.post("/demo/unhealthy-pod/delete");
+      if (res.data.success) {
+        setPodDemoPhase("recovered");
+        setPodDemoRecovery({ action: "deleted", pod: res.data.pod });
+        setTimeout(() => {
+          load().then(({ nodes: nl, pods: pl }) => {
+            setNodes(nl);
+            setPods(pl);
+          });
+        }, 2000);
+      } else {
+        setPodDemoError("Recovery failed");
+      }
+    } catch (e) {
+      setPodDemoError(e.message);
+    } finally {
+      setPodDemoLoading(false);
+    }
+  };
+
+  const handlePodReset = () => {
+    setPodDemoPhase("idle");
+    setPodDemoFault(null);
+    setPodDemoInvestigation(null);
+    setPodDemoRecovery(null);
+    setPodDemoError(null);
+  };
 
   const nodeRows = nodes.map((line) => {
     const cols = line.split(/\s+/);
@@ -378,6 +589,214 @@ export default function Kubernetes() {
           )}
         </Card>
       )}
+
+      {/* ---- Node failure demo (staged flow) ---- */}
+      <Card
+        title="Unhealthy node demo"
+        subtitle={
+          nodeDemoPhase === "idle"
+            ? "Step 1: Worker node is cordoned + tainted + stress pod running"
+            : nodeDemoPhase === "failed"
+            ? "Step 2: Node is SchedulingDisabled \u2014 run OpenSRE investigation"
+            : nodeDemoPhase === "investigated"
+            ? "Step 3: RCA collected \u2014 recover the node"
+            : nodeDemoPhase === "recovered"
+            ? "Node recovered \u2014 click Re-fail to make it unhealthy again"
+            : "Done \u2014 node recovered"
+        }
+        actions={
+          nodeDemoPhase === "idle" ? (
+            <button className="btn btn--primary" onClick={handleNodeInvestigate} disabled={nodeDemoLoading}>
+              {nodeDemoLoading ? <Loader2 size={15} className="btn__spinner" /> : <Search size={15} />}
+              {" "}1. Investigate with OpenSRE
+            </button>
+          ) : nodeDemoPhase === "failed" ? (
+            <button className="btn btn--primary" onClick={handleNodeInvestigate} disabled={nodeDemoLoading}>
+              {nodeDemoLoading ? <Loader2 size={15} className="btn__spinner" /> : <Search size={15} />}
+              {" "}1. Investigate with OpenSRE
+            </button>
+          ) : nodeDemoPhase === "investigated" ? (
+            <button className="btn btn--primary" onClick={handleNodeRecover} disabled={nodeDemoLoading}>
+              {nodeDemoLoading ? <Loader2 size={15} className="btn__spinner" /> : <RotateCcw size={15} />}
+              {" "}2. Recover
+            </button>
+          ) : nodeDemoPhase === "recovered" ? (
+            <button className="btn btn--primary" onClick={handleNodeRefail} disabled={nodeDemoLoading}>
+              {nodeDemoLoading ? <Loader2 size={15} className="btn__spinner" /> : <Zap size={15} />}
+              {" "}Re-fail node
+            </button>
+          ) : (
+            <button className="btn btn--ghost btn--sm" onClick={handleNodeReset}>
+              Reset demo
+            </button>
+          )
+        }
+      >
+        {nodeDemoError && (
+          <div className="alert alert--danger" style={{ marginBottom: "var(--space-3)" }}>
+            {nodeDemoError}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", marginBottom: "var(--space-3)" }}>
+          <Badge tone="danger">
+            Node unhealthy
+          </Badge>
+          <Badge tone="danger">
+            SchedulingDisabled
+          </Badge>
+          <Badge tone="warning">
+            demo-unhealthy taint
+          </Badge>
+          {nodeDemoPhase === "investigated" && <Badge tone="success">RCA ready</Badge>}
+          {nodeDemoPhase === "recovered" && <Badge tone="success">Recovered</Badge>}
+        </div>
+
+        {nodeDemoFault && (
+          <div style={{ marginBottom: "var(--space-3)", fontSize: 13 }}>
+            <strong>Fault:</strong>{" "}
+            <Badge tone="danger">{nodeDemoFault.action}</Badge>
+            <span className="text-muted" style={{ marginLeft: "var(--space-2)" }}>
+              stress pod {nodeDemoFault.stress_pod} deployed to {nodeDemoFault.namespace}
+            </span>
+          </div>
+        )}
+
+        {nodeDemoRecovery && (
+          <div style={{ marginBottom: "var(--space-3)", fontSize: 13 }}>
+            <strong>Recovery:</strong>{" "}
+            <Badge tone="success">{nodeDemoRecovery.action}</Badge>
+            <span className="text-muted" style={{ marginLeft: "var(--space-2)" }}>
+              stress pod deleted, node uncordoned
+            </span>
+          </div>
+        )}
+
+        {nodeDemoInvestigation && (
+          <div style={{
+            padding: "var(--space-3)",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            background: "var(--bg-muted)",
+            marginTop: "var(--space-3)",
+          }}>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: "var(--space-2)", display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+              <Target size={13} /> OpenSRE Investigation Result
+            </div>
+            <pre style={{
+              fontFamily: "monospace",
+              fontSize: 12,
+              whiteSpace: "pre-wrap",
+              maxHeight: 350,
+              overflow: "auto",
+              background: "var(--bg-tertiary)",
+              borderRadius: "var(--radius-sm)",
+              padding: "var(--space-3)",
+            }}>
+              {nodeDemoInvestigation.stdout || nodeDemoInvestigation.stderr || "No output"}
+            </pre>
+          </div>
+        )}
+      </Card>
+
+      {/* ---- Unhealthy pod demo (staged flow) ---- */}
+      <Card
+        title="Unhealthy pod demo"
+        subtitle={
+          podDemoPhase === "idle"
+            ? "Step 1: Deploy a crashing pod (order-service can't reach database)"
+            : podDemoPhase === "deployed"
+            ? "Step 2: Pod is CrashLoopBackOff \u2014 run OpenSRE investigation"
+            : podDemoPhase === "investigated"
+            ? "Step 3: RCA collected \u2014 delete the bad pod"
+            : "Done \u2014 unhealthy pod removed"
+        }
+        actions={
+          podDemoPhase === "idle" ? (
+            <button className="btn btn--primary" onClick={handlePodDeploy} disabled={podDemoLoading}>
+              {podDemoLoading ? <Loader2 size={15} className="btn__spinner" /> : <Zap size={15} />}
+              {" "}1. Deploy bad pod
+            </button>
+          ) : podDemoPhase === "deployed" ? (
+            <button className="btn btn--primary" onClick={handlePodInvestigate} disabled={podDemoLoading}>
+              {podDemoLoading ? <Loader2 size={15} className="btn__spinner" /> : <Search size={15} />}
+              {" "}2. Investigate with OpenSRE
+            </button>
+          ) : podDemoPhase === "investigated" ? (
+            <button className="btn btn--primary" onClick={handlePodRecover} disabled={podDemoLoading}>
+              {podDemoLoading ? <Loader2 size={15} className="btn__spinner" /> : <RotateCcw size={15} />}
+              {" "}3. Recover
+            </button>
+          ) : (
+            <button className="btn btn--ghost btn--sm" onClick={handlePodReset}>
+              Reset demo
+            </button>
+          )
+        }
+      >
+        {podDemoError && (
+          <div className="alert alert--danger" style={{ marginBottom: "var(--space-3)" }}>
+            {podDemoError}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", marginBottom: "var(--space-3)" }}>
+          <Badge tone={podDemoPhase === "idle" ? "info" : "success"}>
+            {podDemoPhase === "idle" ? "No bad pod" : "Pod running"}
+          </Badge>
+          <Badge tone={podDemoPhase === "deployed" || podDemoPhase === "investigated" || podDemoPhase === "recovered" ? "danger" : "info"}>
+            {podDemoPhase === "deployed" || podDemoPhase === "investigated" || podDemoPhase === "recovered" ? "CrashLoopBackOff" : "Healthy"}
+          </Badge>
+          {podDemoPhase === "investigated" && <Badge tone="success">RCA ready</Badge>}
+          {podDemoPhase === "recovered" && <Badge tone="success">Recovered</Badge>}
+        </div>
+
+        {podDemoFault && (
+          <div style={{ marginBottom: "var(--space-3)", fontSize: 13 }}>
+            <strong>Fault:</strong>{" "}
+            <Badge tone="danger">pod crashed</Badge>
+            <span className="text-muted" style={{ marginLeft: "var(--space-2)" }}>
+              {podDemoFault.pod} in {podDemoFault.namespace}
+            </span>
+          </div>
+        )}
+
+        {podDemoRecovery && (
+          <div style={{ marginBottom: "var(--space-3)", fontSize: 13 }}>
+            <strong>Recovery:</strong>{" "}
+            <Badge tone="success">{podDemoRecovery.action}</Badge>
+            <span className="text-muted" style={{ marginLeft: "var(--space-2)" }}>
+              {podDemoRecovery.pod} deleted
+            </span>
+          </div>
+        )}
+
+        {podDemoInvestigation && (
+          <div style={{
+            padding: "var(--space-3)",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            background: "var(--bg-muted)",
+            marginTop: "var(--space-3)",
+          }}>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: "var(--space-2)", display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+              <Target size={13} /> OpenSRE Investigation Result
+            </div>
+            <pre style={{
+              fontFamily: "monospace",
+              fontSize: 12,
+              whiteSpace: "pre-wrap",
+              maxHeight: 350,
+              overflow: "auto",
+              background: "var(--bg-tertiary)",
+              borderRadius: "var(--radius-sm)",
+              padding: "var(--space-3)",
+            }}>
+              {podDemoInvestigation.stdout || podDemoInvestigation.stderr || "No output"}
+            </pre>
+          </div>
+        )}
+      </Card>
     </>
   );
 }
