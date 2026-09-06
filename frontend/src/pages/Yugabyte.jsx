@@ -12,6 +12,10 @@ import {
   Table,
   List,
   Plus,
+  Target,
+  Zap,
+  RotateCcw,
+  Search,
 } from "lucide-react";
 
 const DEFAULT_TABLE = "test_table";
@@ -31,6 +35,15 @@ export default function Yugabyte() {
   const [insertResult, setInsertResult] = useState(null);
   const [insertError, setInsertError] = useState(null);
   const [insertLoading, setInsertLoading] = useState(false);
+
+  // --- Demo staged flow ---
+  const [demoPhase, setDemoPhase] = useState("idle"); // idle | failed | investigated | recovered
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [demoSeed, setDemoSeed] = useState(null);
+  const [demoFault, setDemoFault] = useState(null);
+  const [demoInvestigation, setDemoInvestigation] = useState(null);
+  const [demoRecovery, setDemoRecovery] = useState(null);
+  const [demoError, setDemoError] = useState(null);
 
   useEffect(() => {
     async function load() {
@@ -147,7 +160,7 @@ export default function Yugabyte() {
       ? "Unreachable"
       : status === "backend-offline"
       ? "Backend offline"
-      : "Checking…";
+      : "Checking\u2026";
 
   const formatResult = (data) => {
     if (!data) return "No data";
@@ -189,13 +202,82 @@ export default function Yugabyte() {
     );
   };
 
+  // --- Demo handlers ---
+  const handleFail = async () => {
+    setDemoLoading(true);
+    setDemoError(null);
+    setDemoInvestigation(null);
+    setDemoRecovery(null);
+    try {
+      const res = await api.post("/demo/db-failure/fail", { target: "yugabyte" });
+      if (res.data.success) {
+        setDemoPhase("failed");
+        setDemoSeed(res.data.seed);
+        setDemoFault(res.data.fault);
+        setStatus("unreachable");
+      } else {
+        setDemoError(res.data.error || "Failed to inject fault");
+      }
+    } catch (e) {
+      setDemoError(e.message);
+    } finally {
+      setDemoLoading(false);
+    }
+  };
+
+  const handleInvestigate = async () => {
+    setDemoLoading(true);
+    setDemoError(null);
+    try {
+      const res = await api.post("/demo/db-failure/investigate", { target: "yugabyte" });
+      if (res.data.success) {
+        setDemoPhase("investigated");
+        setDemoInvestigation(res.data.opensre);
+      } else {
+        setDemoError(res.data.error || "Investigation failed");
+      }
+    } catch (e) {
+      setDemoError(e.message);
+    } finally {
+      setDemoLoading(false);
+    }
+  };
+
+  const handleRecover = async () => {
+    setDemoLoading(true);
+    setDemoError(null);
+    try {
+      const res = await api.post("/demo/db-failure/recover", { target: "yugabyte" });
+      if (res.data.success) {
+        setDemoPhase("recovered");
+        setDemoRecovery(res.data.recovery);
+        setTimeout(() => setStatus("connected"), 2000);
+      } else {
+        setDemoError(res.data.error || "Recovery failed");
+      }
+    } catch (e) {
+      setDemoError(e.message);
+    } finally {
+      setDemoLoading(false);
+    }
+  };
+
+  const handleReset = () => {
+    setDemoPhase("idle");
+    setDemoSeed(null);
+    setDemoFault(null);
+    setDemoInvestigation(null);
+    setDemoRecovery(null);
+    setDemoError(null);
+  };
+
   return (
     <>
       <div className="page-head">
         <div>
           <h1>YugabyteDB (YSQL)</h1>
           <p className="page-head__sub">
-            Distributed PostgreSQL-compatible database · SQL operations
+            Distributed PostgreSQL-compatible database \u00b7 SQL operations
           </p>
         </div>
       </div>
@@ -203,7 +285,7 @@ export default function Yugabyte() {
       <div className="grid-2">
         <Card
           title="Connection"
-          subtitle="YSQL API · PostgreSQL wire protocol"
+          subtitle="YSQL API \u00b7 PostgreSQL wire protocol"
           actions={
             <Badge tone={tone}>
               {checking ? (
@@ -213,7 +295,7 @@ export default function Yugabyte() {
               ) : (
                 <XCircle size={12} />
               )}
-              {checking ? "Checking…" : label}
+              {checking ? "Checking\u2026" : label}
             </Badge>
           }
         >
@@ -317,13 +399,123 @@ export default function Yugabyte() {
 
           {tableLoading ? (
             <div style={{ textAlign: "center", padding: "var(--space-4)" }}>
-              <Loader2 size={16} className="btn__spinner" /> Loading…
+              <Loader2 size={16} className="btn__spinner" /> Loading\u2026
             </div>
           ) : (
             renderTable(tableData)
           )}
         </Card>
       </div>
+
+      {/* ---- Database failure demo (staged flow) ---- */}
+      <Card
+        title="Database failure demo"
+        subtitle={
+          demoPhase === "idle"
+            ? "Step 1: Seed instance records and stop the database"
+            : demoPhase === "failed"
+            ? "Step 2: Database is DOWN \u2014 run OpenSRE investigation"
+            : demoPhase === "investigated"
+            ? "Step 3: RCA collected \u2014 recover the database"
+            : "Done \u2014 database recovered"
+        }
+        actions={
+          demoPhase === "idle" ? (
+            <button className="btn btn--primary" onClick={handleFail} disabled={demoLoading}>
+              {demoLoading ? <Loader2 size={15} className="btn__spinner" /> : <Zap size={15} />}
+              {" "}1. Create & fail instance
+            </button>
+          ) : demoPhase === "failed" ? (
+            <button className="btn btn--primary" onClick={handleInvestigate} disabled={demoLoading}>
+              {demoLoading ? <Loader2 size={15} className="btn__spinner" /> : <Search size={15} />}
+              {" "}2. Investigate with OpenSRE
+            </button>
+          ) : demoPhase === "investigated" ? (
+            <button className="btn btn--primary" onClick={handleRecover} disabled={demoLoading}>
+              {demoLoading ? <Loader2 size={15} className="btn__spinner" /> : <RotateCcw size={15} />}
+              {" "}3. Recover
+            </button>
+          ) : (
+            <button className="btn btn--ghost btn--sm" onClick={handleReset}>
+              Reset demo
+            </button>
+          )
+        }
+      >
+        {demoError && (
+          <div className="alert alert--danger" style={{ marginBottom: "var(--space-3)" }}>
+            {demoError}
+          </div>
+        )}
+
+        {/* Phase badges */}
+        <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", marginBottom: "var(--space-3)" }}>
+          <Badge tone={demoPhase === "idle" ? "info" : demoPhase !== "idle" ? "success" : "info"}>
+            {demoPhase === "idle" ? "Waiting" : "Seeded"}
+          </Badge>
+          <Badge tone={demoPhase === "failed" || demoPhase === "investigated" || demoPhase === "recovered" ? "danger" : "info"}>
+            {demoPhase === "failed" || demoPhase === "investigated" || demoPhase === "recovered" ? "DOWN" : "Healthy"}
+          </Badge>
+          {demoPhase === "investigated" && <Badge tone="success">RCA ready</Badge>}
+          {demoPhase === "recovered" && <Badge tone="success">Recovered</Badge>}
+        </div>
+
+        {/* Seed info */}
+        {demoSeed && (
+          <div style={{ marginBottom: "var(--space-3)", fontSize: 13 }}>
+            <strong>Seeded:</strong> {demoSeed.inserted?.join(", ") || "\u2014"}
+          </div>
+        )}
+
+        {/* Fault info */}
+        {demoFault && (
+          <div style={{ marginBottom: "var(--space-3)", fontSize: 13 }}>
+            <strong>Fault:</strong>{" "}
+            <Badge tone="danger">{demoFault.action}</Badge>
+            <span className="text-muted" style={{ marginLeft: "var(--space-2)" }}>
+              container {demoFault.container_stopped} stopped
+            </span>
+          </div>
+        )}
+
+        {/* Recovery info */}
+        {demoRecovery && (
+          <div style={{ marginBottom: "var(--space-3)", fontSize: 13 }}>
+            <strong>Recovery:</strong>{" "}
+            <Badge tone="success">{demoRecovery.action}</Badge>
+            <span className="text-muted" style={{ marginLeft: "var(--space-2)" }}>
+              container {demoRecovery.container_restarted} restarted
+            </span>
+          </div>
+        )}
+
+        {/* OpenSRE investigation result */}
+        {demoInvestigation && (
+          <div style={{
+            padding: "var(--space-3)",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            background: "var(--bg-muted)",
+            marginTop: "var(--space-3)",
+          }}>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: "var(--space-2)", display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+              <Target size={13} /> OpenSRE Investigation Result
+            </div>
+            <pre style={{
+              fontFamily: "monospace",
+              fontSize: 12,
+              whiteSpace: "pre-wrap",
+              maxHeight: 350,
+              overflow: "auto",
+              background: "var(--bg-tertiary)",
+              borderRadius: "var(--radius-sm)",
+              padding: "var(--space-3)",
+            }}>
+              {demoInvestigation.stdout || demoInvestigation.stderr || "No output"}
+            </pre>
+          </div>
+        )}
+      </Card>
     </>
   );
 }

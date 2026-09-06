@@ -224,6 +224,23 @@ def collect_pod_evidence(
 
         evidence["metrics"]["requests"] = requests_result
 
+    # Fallback: if instance queries returned empty, try pod-label queries
+    pod_label = f'pod="{pod_name}"'
+    for key, metric_name in [
+        ("up", "up"),
+        ("memory", "process_resident_memory_bytes"),
+        ("cpu", "process_cpu_seconds_total"),
+        ("requests", "http_requests_total"),
+    ]:
+        existing = evidence["metrics"].get(key, {})
+        existing_result = existing.get("data", {}).get("data", {}).get("result", []) if isinstance(existing, dict) else []
+        if not existing_result:
+            fallback = victoriametrics.query(f'{metric_name}{{{pod_label}}}')
+            if fallback.get("success"):
+                fallback_result = fallback.get("data", {}).get("data", {}).get("result", [])
+                if fallback_result:
+                    evidence["metrics"][key] = fallback
+
     # VictoriaMetrics per-pod traffic + latency metrics (kubernetes-pods job)
     evidence["metrics"]["pod"] = _collect_pod_metrics(pod_name)
 

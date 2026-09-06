@@ -10,6 +10,7 @@ from app.routes.aerospike import router as aerospike_router
 from app.routes.yugabyte import router as yugabyte_router
 from app.routes.github import router as github_router
 from app.routes.chaos import router as chaos_router
+from app.routes.demo import router as demo_router
 
 app = FastAPI(
     title="OpenSRE Backend",
@@ -34,6 +35,7 @@ app.include_router(aerospike_router)
 app.include_router(yugabyte_router)
 app.include_router(github_router)
 app.include_router(chaos_router)
+app.include_router(demo_router)
 
 
 @app.get("/")
