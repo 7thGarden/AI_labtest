@@ -3,9 +3,12 @@ import socket
 from app.core.config import settings
 from app.services import aerospike
 from app.services import containers
+from app.services import db_investigation
 from app.services import git_correlation
 from app.services import grafana
+from app.services import k8s_log_analysis
 from app.services import kubectl
+from app.services import nginx as nginx_service
 from app.services import victoriametrics
 from app.services import yugabyte
 
@@ -67,6 +70,7 @@ def collect_pod_evidence(
     namespace: str,
     pod_name: str,
     context: str | None = None,
+    tail: int = 200,
 ):
     evidence = {
         "pod": {
@@ -126,7 +130,7 @@ def collect_pod_evidence(
             "Unable to collect pod status",
         )
 
-    # Pod events
+    # Pod events (raw text, kept for compatibility)
     events_result = kubectl.get_pod_events(
         namespace,
         pod_name,
@@ -144,41 +148,192 @@ def collect_pod_evidence(
             "Unable to collect pod events",
         )
 
-    # Container logs (root-cause detail: exceptions, OOM, probe failures)
-    logs_result = kubectl.get_pod_logs(
+    # Structured events (reason/type/timestamps) for the incident timeline.
+    events_json = kubectl.get_pod_events_json(
         namespace,
         pod_name,
-        tail=60,
-        context=context,
+        context,
     )
 
-    if logs_result.get("success"):
-        evidence["kubernetes"]["logs_tail"] = logs_result.get(
-            "stdout",
-            "",
-        )[-4000:]
+    if events_json.get("success"):
+        evidence["kubernetes"]["events_structured"] = (
+            k8s_log_analysis.parse_events(events_json.get("items", []))
+        )
     else:
-        evidence["kubernetes"]["logs_error"] = logs_result.get(
-            "stderr",
-            "Unable to collect pod logs",
+        evidence["kubernetes"]["events_structured_error"] = (
+            events_json.get("stderr") or "Unable to collect structured events"
+        )
+        evidence["kubernetes"]["events_structured"] = []
+
+    # Container logs (root-cause detail: exceptions, OOM, probe failures).
+    # Per-container, current + previous (when restarted), with relevant-line
+    # extraction so OpenSRE gets signal instead of raw dumps.
+    state = evidence["kubernetes"].get("state") or {}
+    state_containers = state.get("containers") or []
+    container_names = [c.get("name") for c in state_containers if c.get("name")][:4]
+
+    fetch_tail = max(10, min(tail, 500))
+    per_container = []
+    relevant_lines = []
+
+    def _collect_container_logs(container_name):
+        current = kubectl.get_pod_logs_container(
+            namespace,
+            pod_name,
+            container_name,
+            tail=fetch_tail,
+            context=context,
+        )
+        current_text = ""
+        if current.get("success"):
+            current_text = current.get("stdout", "") or ""
+        restart_count = next(
+            (
+                c.get("restart_count") or 0
+                for c in state_containers
+                if c.get("name") == container_name
+            ),
+            0,
+        )
+        previous_text = ""
+        previous_available = False
+        if restart_count > 0:
+            previous = kubectl.get_pod_logs_container(
+                namespace,
+                pod_name,
+                container_name,
+                tail=min(fetch_tail, 100),
+                previous=True,
+                context=context,
+            )
+            if previous.get("success"):
+                previous_text = previous.get("stdout", "") or ""
+                previous_available = True
+
+        entry = {
+            "container": container_name,
+            "restart_count": restart_count,
+            "current_success": current.get("success", False),
+            "current_tail": current_text[-4000:],
+            "previous_available": previous_available,
+            "previous_tail": previous_text[-3500:] if previous_text else None,
+        }
+        if not current.get("success"):
+            entry["logs_error"] = (current.get("stderr") or "")[:500]
+
+        # Relevant-line extraction (verbatim lines, capped).
+        for text, is_previous in (
+            (current_text, False),
+            (previous_text, True),
+        ):
+            if text.strip():
+                relevant_lines.extend(
+                    k8s_log_analysis.extract_relevant_lines(
+                        text,
+                        pod_name,
+                        namespace,
+                        container_name,
+                        is_previous,
+                        max_lines=8,
+                    )
+                )
+        return entry
+
+    if container_names:
+        for name in container_names:
+            per_container.append(_collect_container_logs(name))
+    else:
+        # Fallback: pod state unavailable — legacy single-call behavior so
+        # the evidence shape never comes back empty.
+        logs_result = kubectl.get_pod_logs(
+            namespace,
+            pod_name,
+            tail=min(fetch_tail, 60),
+            context=context,
         )
 
-    # Previous-iteration logs (crashloop / already-restarted containers)
-    previous_result = kubectl.get_pod_logs(
-        namespace,
-        pod_name,
-        tail=40,
-        previous=True,
-        context=context,
-    )
+        if logs_result.get("success"):
+            evidence["kubernetes"]["logs_tail"] = logs_result.get(
+                "stdout",
+                "",
+            )[-4000:]
+            relevant_lines.extend(
+                k8s_log_analysis.extract_relevant_lines(
+                    logs_result.get("stdout", ""),
+                    pod_name,
+                    namespace,
+                    None,
+                    False,
+                )
+            )
+        else:
+            evidence["kubernetes"]["logs_error"] = logs_result.get(
+                "stderr",
+                "Unable to collect pod logs",
+            )
 
-    if previous_result.get("success"):
-        evidence["kubernetes"]["logs_previous"] = previous_result.get(
-            "stdout",
-            "",
-        )[-3500:]
-    else:
-        evidence["kubernetes"]["logs_previous_available"] = False
+        previous_result = kubectl.get_pod_logs(
+            namespace,
+            pod_name,
+            tail=40,
+            previous=True,
+            context=context,
+        )
+
+        if previous_result.get("success"):
+            evidence["kubernetes"]["logs_previous"] = previous_result.get(
+                "stdout",
+                "",
+            )[-3500:]
+            relevant_lines.extend(
+                k8s_log_analysis.extract_relevant_lines(
+                    previous_result.get("stdout", ""),
+                    pod_name,
+                    namespace,
+                    None,
+                    True,
+                )
+            )
+        else:
+            evidence["kubernetes"]["logs_previous_available"] = False
+
+    if per_container:
+        # Compatibility keys point at the first (primary) container.
+        primary = per_container[0]
+        evidence["kubernetes"]["logs_tail"] = primary.get("current_tail", "")
+        if primary.get("logs_error") and not primary.get("current_success"):
+            evidence["kubernetes"]["logs_error"] = primary["logs_error"]
+        if primary.get("previous_available"):
+            evidence["kubernetes"]["logs_previous"] = primary.get("previous_tail", "")
+        else:
+            evidence["kubernetes"]["logs_previous_available"] = any(
+                c.get("previous_available") for c in per_container
+            )
+
+    relevant_lines = relevant_lines[: k8s_log_analysis.MAX_RELEVANT_LINES]
+    primary_text = (
+        per_container[0].get("current_tail", "") if per_container else ""
+    )
+    evidence["kubernetes"]["log_analysis"] = {
+        "per_container": [
+            {
+                "container": c.get("container"),
+                "restart_count": c.get("restart_count"),
+                "current_success": c.get("current_success"),
+                "previous_available": c.get("previous_available"),
+            }
+            for c in per_container
+        ],
+        "relevant_lines": relevant_lines,
+        "signal_counts": k8s_log_analysis.summarize_signals(relevant_lines),
+        "tail_context": k8s_log_analysis.tail_context(primary_text),
+    }
+
+    # Merged best-effort timeline: event timestamps + log signals.
+    evidence["kubernetes"]["timeline"] = k8s_log_analysis.build_timeline(
+        relevant_lines,
+        evidence["kubernetes"].get("events_structured", []),
+    )
 
     # Pod endpoint
     endpoint_result = kubectl.get_pod_endpoint(
@@ -500,6 +655,58 @@ def _collect_grafana_summary(evidence):
     evidence["grafana"] = summary
 
 
+def collect_database_evidence(database: str):
+    """
+    Collect comprehensive database investigation evidence for YugabyteDB or Aerospike.
+    This provides read-only investigation data for OpenSRE root-cause analysis.
+    """
+    database = database.lower()
+
+    if database == "yugabyte":
+        evidence = db_investigation.investigate_yugabyte()
+    elif database == "aerospike":
+        evidence = db_investigation.investigate_aerospike()
+    else:
+        return {
+            "success": False,
+            "error": f"Unknown database '{database}'. Supported: yugabyte, aerospike",
+        }
+
+    # Add target metadata for OpenSRE
+    evidence["target"] = {
+        "type": "database",
+        "database": database,
+        "name": database,
+    }
+
+    # Add git correlation
+    evidence["git"] = git_correlation.correlate_commits(incident_start=None)
+
+    return {
+        "success": True,
+        "evidence": evidence,
+    }
+
+
+def collect_all_database_evidence():
+    """
+    Collect investigation evidence for both YugabyteDB and Aerospike.
+    """
+    evidence = db_investigation.investigate_all_databases()
+
+    evidence["target"] = {
+        "type": "databases",
+        "name": "all-databases",
+    }
+
+    evidence["git"] = git_correlation.correlate_commits(incident_start=None)
+
+    return {
+        "success": True,
+        "evidence": evidence,
+    }
+
+
 def _collect_database_summary(evidence):
     summary = {}
 
@@ -514,6 +721,54 @@ def _collect_database_summary(evidence):
         summary["yugabyte"] = {"success": False, "error": str(exc)}
 
     evidence["databases"] = summary
+
+
+def _collect_nginx_summary(evidence, context: str | None = None):
+    try:
+        nginx_ev = nginx_service.investigate_nginx(context=context)
+        evidence["nginx"] = nginx_ev.get("nginx", nginx_ev)
+        # also surface a compact health check
+        evidence["nginx"]["_health_compact"] = nginx_service.health(context=context)
+    except Exception as exc:
+        evidence["nginx"] = {"success": False, "error": str(exc)}
+
+
+def collect_nginx_evidence(context: str | None = None, tail: int = 250):
+    """
+    Collect comprehensive Nginx investigation evidence and correlate it
+    with Kubernetes, VictoriaMetrics and GitHub — read-only, safe.
+    Keeps Nginx investigation independent of database integrations.
+    """
+    nginx_ev = nginx_service.investigate_nginx(context=context, tail=tail)
+
+    # correlate with cluster / metrics / git
+    evidence: dict = {
+        "target": {"type": "nginx", "name": "nginx"},
+        "cluster": context,
+        "nginx": nginx_ev.get("nginx", nginx_ev),
+        "kubernetes": {},
+        "victoriametrics": {},
+        "git": {},
+    }
+
+    # lightweight cluster summary (reuse existing helper)
+    try:
+        _collect_kubernetes_summary(evidence, context)
+    except Exception as exc:
+        evidence["kubernetes"] = {"error": str(exc)}
+
+    try:
+        _collect_vm_summary(evidence)
+    except Exception as exc:
+        evidence["victoriametrics"] = {"error": str(exc)}
+
+    evidence["git"] = git_correlation.correlate_commits(incident_start=None)
+
+    # aggregated nginx summary for top-level convenience
+    nginx_summary = evidence["nginx"].get("summary") if isinstance(evidence.get("nginx"), dict) else {}
+    evidence["summary"] = nginx_summary
+
+    return {"success": True, "evidence": evidence}
 
 
 def collect_stack_evidence(context: str | None = None):
@@ -535,6 +790,7 @@ def collect_stack_evidence(context: str | None = None):
         "opentelemetry": {},
         "grafana": {},
         "databases": {},
+        "nginx": {},
     }
 
     _collect_kubernetes_summary(evidence, context)
@@ -542,6 +798,7 @@ def collect_stack_evidence(context: str | None = None):
     _collect_otel_summary(evidence, context)
     _collect_grafana_summary(evidence)
     _collect_database_summary(evidence)
+    _collect_nginx_summary(evidence, context)
 
     evidence["git"] = git_correlation.correlate_commits(incident_start=None)
 
@@ -763,7 +1020,21 @@ def collect_alert_evidence(
 
     evidence = None
 
-    if namespace and pod:
+    # Nginx-specific path: if alert looks like nginx / gateway, collect nginx evidence directly
+    try:
+        if nginx_service.is_nginx_alert(alert):
+            result = collect_nginx_evidence(context)
+            if result.get("success"):
+                evidence = result["evidence"]
+                evidence["target"] = {
+                    "type": "nginx",
+                    "namespace": namespace or evidence.get("nginx", {}).get("namespace", "opensre"),
+                    "name": "nginx",
+                }
+    except Exception:
+        pass
+
+    if evidence is None and namespace and pod:
         result = collect_pod_evidence(namespace, pod, context)
 
         if result.get("success"):
@@ -899,31 +1170,67 @@ def _evidence_digest(alert: dict, evidence: dict, git_corr=None, max_chars: int 
         lines.append(f"kubectl: {header}")
         lines.append(f"kubectl: {status[1]}")
 
-    events = (k8s.get("events") or "").strip().splitlines()
-    reason_tokens = (
-        "OOMKilled",
-        "CrashLoopBackOff",
-        "ImagePullBackOff",
-        "BackOff",
-        "FailedScheduling",
-        "Unhealthy",
-        "Failed",
-        "Killing",
-        "Evicted",
-    )
-    relevant = [
-        line
-        for line in events[1:]
-        if any(token in line for token in reason_tokens)
-    ]
-    if relevant:
-        lines.append("cluster events:")
-        lines.extend(f"  {line}" for line in relevant[-6:])
+    structured_events = k8s.get("events_structured") or []
+    if structured_events:
+        lines.append("k8s events (newest relevant first):")
+        for event in structured_events[:8]:
+            ts = event.get("timestamp") or "no-ts"
+            count = event.get("count", 1)
+            suffix = f" x{count}" if isinstance(count, int) and count > 1 else ""
+            lines.append(
+                f"  {ts} {event.get('type')}/{event.get('reason')}{suffix}: "
+                f"{(event.get('message') or '')[:200]}"
+            )
+    else:
+        events = (k8s.get("events") or "").strip().splitlines()
+        reason_tokens = (
+            "OOMKilled",
+            "CrashLoopBackOff",
+            "ImagePullBackOff",
+            "BackOff",
+            "FailedScheduling",
+            "Unhealthy",
+            "Failed",
+            "Killing",
+            "Evicted",
+        )
+        relevant = [
+            line
+            for line in events[1:]
+            if any(token in line for token in reason_tokens)
+        ]
+        if relevant:
+            lines.append("cluster events:")
+            lines.extend(f"  {line}" for line in relevant[-6:])
 
-    logs = (k8s.get("logs_tail") or "").strip().splitlines()
-    if logs:
-        lines.append("log tail (last lines):")
-        lines.extend(f"  {line[:220]}" for line in logs[-5:] if line.strip())
+    log_analysis = k8s.get("log_analysis") or {}
+    relevant_lines = log_analysis.get("relevant_lines") or []
+    if relevant_lines:
+        counts = log_analysis.get("signal_counts") or {}
+        summary = ", ".join(
+            f"{signal}={count}" for signal, count in sorted(counts.items())
+        )
+        lines.append(f"relevant log signals ({summary}):")
+        for entry in relevant_lines[:8]:
+            where = entry.get("container") or "?"
+            if entry.get("previous"):
+                where += "(previous)"
+            ts = f"{entry.get('ts')} " if entry.get("ts") else ""
+            lines.append(
+                f"  [{where}][{entry.get('signal')}] {ts}{(entry.get('line') or '')[:200]}"
+            )
+    else:
+        logs = (k8s.get("logs_tail") or "").strip().splitlines()
+        if logs:
+            lines.append("log tail (last lines):")
+            lines.extend(f"  {line[:220]}" for line in logs[-5:] if line.strip())
+
+    timeline = k8s.get("timeline") or []
+    if timeline:
+        lines.append("timeline:")
+        for item in timeline[:6]:
+            ts = item.get("ts") or "no-ts"
+            lines.append(f"  {ts} [{item.get('source')}] {(item.get('text') or '')[:180]}")
 
     metrics = evidence.get("metrics") or {}
     pod_metrics = metrics.get("pod") or {}
@@ -1006,6 +1313,45 @@ def _evidence_digest(alert: dict, evidence: dict, git_corr=None, max_chars: int 
     for name, item in databases.items():
         if isinstance(item, dict) and not item.get("success"):
             lines.append(f"database {name}: unhealthy ({item.get('error')})")
+
+    # Nginx summary (when present)
+    nginx = evidence.get("nginx") or {}
+    if isinstance(nginx, dict) and (nginx.get("summary") or nginx.get("health_status") or nginx.get("pods")):
+        summary = nginx.get("summary") or {}
+        health_status = nginx.get("health_status") or nginx.get("health", {}).get("status") if isinstance(nginx.get("health"), dict) else None
+        cfg_status = nginx.get("config_status") or nginx.get("config_validation", {}).get("valid")
+        pods = nginx.get("pods", [])
+        if health_status:
+            lines.append(f"nginx health: {health_status} (pods={len(pods) if isinstance(pods, list) else '?'})")
+        if cfg_status is not None:
+            lines.append(f"nginx config: {'valid' if cfg_status is True or cfg_status=='valid' else 'invalid' if cfg_status is False or cfg_status=='invalid' else str(cfg_status)}")
+        if summary:
+            pieces = []
+            if summary.get("http_5xx") is not None:
+                pieces.append(f"5xx={summary.get('http_5xx')}")
+            if summary.get("http_502") is not None:
+                pieces.append(f"502={summary.get('http_502')}")
+            if summary.get("http_503") is not None:
+                pieces.append(f"503={summary.get('http_503')}")
+            if summary.get("http_504") is not None:
+                pieces.append(f"504={summary.get('http_504')}")
+            if summary.get("connection_refused"):
+                pieces.append(f"conn_refused={summary.get('connection_refused')}")
+            if summary.get("upstream_timeout"):
+                pieces.append(f"upstream_timeout={summary.get('upstream_timeout')}")
+            if summary.get("dns_failures"):
+                pieces.append(f"dns_fail={summary.get('dns_failures')}")
+            if pieces:
+                lines.append("nginx access/error: " + ", ".join(pieces))
+            lat = summary.get("upstream_latency") or {}
+            if lat and lat.get("p99") is not None:
+                lines.append(f"nginx upstream latency p50={lat.get('p50')}s p95={lat.get('p95')}s p99={lat.get('p99')}s avg={lat.get('avg')}s")
+        # error samples
+        log_analysis = nginx.get("log_analysis") or {}
+        err = log_analysis.get("error", {}) if isinstance(log_analysis, dict) else {}
+        if isinstance(err, dict) and err.get("interesting_tail"):
+            for l in err["interesting_tail"][:3]:
+                lines.append(f"nginx log: {l[:180]}")
 
     git_lines = git_correlation.git_digest_lines(git_corr)
     if git_lines:

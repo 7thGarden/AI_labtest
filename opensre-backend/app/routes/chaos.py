@@ -1,9 +1,11 @@
 import re
+import httpx
 from pathlib import Path
 
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from app.core.config import settings
 from app.utils.command import run_command
 
 router = APIRouter(
@@ -28,6 +30,13 @@ INJECT_ACTIONS = {
     "node-cordon": "node-cordon",
     "node-drain": "node-drain",
     "node-network-latency": "node-network-latency",
+    # Data integrity injection actions (call demo API)
+    "insert-empty-yugabyte": "insert-empty-yugabyte",
+    "insert-empty-aerospike": "insert-empty-aerospike",
+    "insert-duplicates-yugabyte": "insert-duplicates-yugabyte",
+    "insert-duplicates-aerospike": "insert-duplicates-aerospike",
+    "insert-invalid-yugabyte": "insert-invalid-yugabyte",
+    "insert-invalid-aerospike": "insert-invalid-aerospike",
 }
 
 RECOVER_ACTIONS = {
@@ -177,6 +186,37 @@ def inject(request: ActionRequest):
             "success": False,
             "error": f"Unknown failure '{request.action}'. Available: {list(INJECT_ACTIONS.keys())}",
         }
+
+    # Data integrity injection actions - call demo API endpoints
+    if action in {
+        "insert-empty-yugabyte", "insert-empty-aerospike",
+        "insert-duplicates-yugabyte", "insert-duplicates-aerospike",
+        "insert-invalid-yugabyte", "insert-invalid-aerospike"
+    }:
+        target = "yugabyte" if "yugabyte" in action else "aerospike"
+        endpoint_map = {
+            "insert-empty": "/api/demo/db-scenario/data-integrity/insert-empty",
+            "insert-duplicates": "/api/demo/db-scenario/data-integrity/insert-duplicates",
+            "insert-invalid": "/api/demo/db-scenario/data-integrity/insert-invalid",
+        }
+        # Determine which type of injection
+        if "empty" in action:
+            endpoint = endpoint_map["insert-empty"]
+        elif "duplicates" in action:
+            endpoint = endpoint_map["insert-duplicates"]
+        else:
+            endpoint = endpoint_map["insert-invalid"]
+
+        base_url = f"http://127.0.0.1:8001"
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.post(f"{base_url}{endpoint}", json={"target": target})
+                if resp.status_code == 200:
+                    return {"success": True, "action": action, "stdout": resp.text}
+                else:
+                    return {"success": False, "action": action, "error": resp.text}
+        except Exception as e:
+            return {"success": False, "action": action, "error": str(e)}
 
     result = _command(["bash", str(RUNBOOK), action])
     if not result.get("success"):

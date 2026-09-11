@@ -4,4 +4,52 @@ const api = axios.create({
   baseURL: "http://127.0.0.1:8001/api",
 });
 
+// Nginx Demo / Investigation API (read-only evidence, reversible demo)
+export const nginxDemoApi = {
+  modes: () => api.get("/demo/nginx/modes"),
+  status: () => api.get("/demo/nginx/status"),
+  health: () => api.get("/nginx/health"),
+  fail: (mode) => api.post("/demo/nginx/fail", { mode }),
+  investigate: (mode) => api.post("/demo/nginx/investigate", { mode }),
+  recover: (mode) => api.post("/demo/nginx/recover", { mode }),
+  evidence: () => api.get("/nginx/evidence"),
+  opensreInvestigate: () => api.get("/nginx/investigate"),
+};
+
+// Database Investigation API
+export const dbInvestigationApi = {
+  // YugabyteDB
+  yugabyteHealth: () => api.get("/db-investigation/yugabyte/health"),
+  yugabyteEvidence: (params = {}) => api.get("/db-investigation/yugabyte/evidence", { params }),
+  yugabyteQuery: (sql, options = {}) => api.post("/db-investigation/yugabyte/query", { sql, ...options }),
+  opensreInvestigateYugabyte: () => api.get("/db-investigation/opensre/investigate/yugabyte"),
+
+  // Aerospike
+  aerospikeHealth: () => api.get("/db-investigation/aerospike/health"),
+  aerospikeEvidence: (params = {}) => api.get("/db-investigation/aerospike/evidence", { params }),
+  aerospikeRecord: (data) => api.post("/db-investigation/aerospike/record", data),
+  aerospikeDataIntegrity: (data) => api.post("/db-investigation/aerospike/data-integrity", data),
+  aerospikeNamespaceStats: (namespace, set) => api.post("/db-investigation/aerospike/namespace-stats", null, { params: { namespace, set_name: set } }),
+  opensreInvestigateAerospike: () => api.get("/db-investigation/opensre/investigate/aerospike"),
+
+  // All databases
+  allDatabaseEvidence: () => api.get("/db-investigation/evidence"),
+  opensreInvestigateAll: () => api.get("/db-investigation/opensre/investigate/all"),
+
+  // Demo scenarios
+  dbScenarioList: () => api.get("/demo/db-scenario/list"),
+  dbScenarioUnavailableFail: (target) => api.post("/demo/db-scenario/unavailable/fail", { target }),
+  dbScenarioUnavailableInvestigate: (target) => api.post("/demo/db-scenario/unavailable/investigate", { target }),
+  dbScenarioUnavailableRecover: (target) => api.post("/demo/db-scenario/unavailable/recover", { target }),
+  dbScenarioLatencyInduce: (target) => api.post("/demo/db-scenario/latency/induce", { target }),
+  dbScenarioLatencyInvestigate: (target) => api.post("/demo/db-scenario/latency/investigate", { target }),
+  dbScenarioLatencyRecover: (target) => api.post("/demo/db-scenario/latency/recover", { target }),
+  dbScenarioDataIntegrityCorrupt: (target) => api.post("/demo/db-scenario/data-integrity/corrupt", { target }),
+  dbScenarioDataIntegrityInvestigate: (target) => api.post("/demo/db-scenario/data-integrity/investigate", { target }),
+  dbScenarioDataIntegrityRecover: (target) => api.post("/demo/db-scenario/data-integrity/recover", { target }),
+  dbScenarioDataIntegrityInsertEmpty: (target) => api.post("/demo/db-scenario/data-integrity/insert-empty", { target }),
+  dbScenarioDataIntegrityInsertDuplicates: (target) => api.post("/demo/db-scenario/data-integrity/insert-duplicates", { target }),
+  dbScenarioDataIntegrityInsertInvalid: (target) => api.post("/demo/db-scenario/data-integrity/insert-invalid", { target }),
+};
+
 export default api;

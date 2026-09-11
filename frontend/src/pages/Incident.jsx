@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import api from "../api/api";
 import Card from "../components/Card";
 import Badge from "../components/Badge";
@@ -140,6 +140,21 @@ export default function Incident() {
     []
   );
   const [expandedHistoryIdx, setExpandedHistoryIdx] = useState(null);
+
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Deep-link support: /incident?namespace=<ns>&pod=<name> (e.g. from the
+  // Chaos failure-injection page) pre-selects the incident target once.
+  useEffect(() => {
+    const ns = searchParams.get("namespace");
+    const pod = searchParams.get("pod");
+    if (ns || pod) {
+      if (ns) setNamespace(ns);
+      if (pod) setPodName(pod);
+      setSearchParams({}, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const initialLoadRef = useRef({
     clusters: clusters.length,
@@ -312,6 +327,11 @@ export default function Incident() {
   const events = parseEvents(evidence?.kubernetes?.events || "");
   const endpoint = evidence?.kubernetes?.endpoint;
   const metrics = evidence?.metrics || {};
+  const logAnalysis = evidence?.kubernetes?.log_analysis || null;
+  const relevantLogLines = logAnalysis?.relevant_lines || [];
+  const signalCounts = logAnalysis?.signal_counts || {};
+  const structuredEvents = evidence?.kubernetes?.events_structured || [];
+  const timeline = evidence?.kubernetes?.timeline || [];
 
   const reportObj = investigationMatches ? investigation.report : null;
   const validityScore =
@@ -476,6 +496,25 @@ export default function Incident() {
       evidence?.kubernetes?.events
         ? "```\n" + evidence.kubernetes.events.trimEnd() + "\n```"
         : "_Pod events unavailable._",
+      "",
+      "### Relevant log signals",
+      "",
+      (evidence?.kubernetes?.log_analysis?.relevant_lines || []).length
+        ? evidence.kubernetes.log_analysis.relevant_lines
+            .map(
+              (e) =>
+                `- [${e.container || "?"}${e.previous ? "/previous" : ""}][${e.signal}]${e.ts ? ` ${e.ts}` : ""} ${e.line}`
+            )
+            .join("\n")
+        : "_No ERROR / exception / connection / timeout signals found._",
+      "",
+      "### Timeline",
+      "",
+      (evidence?.kubernetes?.timeline || []).length
+        ? evidence.kubernetes.timeline
+            .map((t) => `- ${t.ts || "—"} [${t.source}] ${t.text}`)
+            .join("\n")
+        : "_No timeline entries._",
       "",
       "## Metrics",
       "",
@@ -828,6 +867,73 @@ export default function Incident() {
                     </div>
                   )}
                 </div>
+
+                <div className="report-section">
+                  <div className="report-section__title">
+                    Relevant pod logs{" "}
+                    {Object.keys(signalCounts).length > 0 && (
+                      <span className="text-muted" style={{ fontWeight: 400 }}>
+                        ({Object.entries(signalCounts).map(([s, c]) => `${s}=${c}`).join(", ")})
+                      </span>
+                    )}
+                  </div>
+                  {relevantLogLines.length === 0 ? (
+                    <p className="text-muted">
+                      No ERROR / exception / connection / timeout signals in the
+                      collected logs{logAnalysis ? "" : " (log analysis unavailable)"}.
+                      {(logAnalysis?.per_container || []).length > 0 && (
+                        <> Checked: {logAnalysis.per_container.map((c) => `${c.container}${c.previous_available ? " (+previous)" : ""}`).join(", ")}</>
+                      )}
+                    </p>
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Container</th>
+                            <th>Signal</th>
+                            <th>Timestamp</th>
+                            <th>Line</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {relevantLogLines.map((entry, index) => (
+                            <tr key={index}>
+                              <td className="cell-mono cell-muted">
+                                {entry.container || "—"}
+                                {entry.previous ? " (prev)" : ""}
+                              </td>
+                              <td>
+                                <Badge tone="danger">{entry.signal}</Badge>
+                              </td>
+                              <td className="cell-mono cell-muted">
+                                {entry.ts || "—"}
+                              </td>
+                              <td className="cell-mono">{entry.line}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {timeline.length > 0 && (
+                  <div className="report-section">
+                    <div className="report-section__title">Timeline</div>
+                    <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+                      {timeline.map((item, index) => (
+                        <li key={index} style={{ display: "flex", gap: "var(--space-2)", fontSize: 13, alignItems: "baseline" }}>
+                          <span className="cell-mono cell-muted" style={{ whiteSpace: "nowrap" }}>
+                            {item.ts || "—"}
+                          </span>
+                          <Badge tone={item.source === "event" ? "warning" : "danger"}>{item.source}</Badge>
+                          <span>{item.text}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="empty-state">

@@ -267,6 +267,98 @@ def get_pod_logs(
     return run_command(command)
 
 
+def get_pod_logs_container(
+    namespace: str,
+    pod_name: str,
+    container: str,
+    tail: int = 200,
+    previous: bool = False,
+    context: str | None = None,
+    timestamps: bool = True,
+):
+    """
+    Read-only container logs for one container (`kubectl logs -c`).
+    `timestamps=True` prepends server-side timestamps so evidence keeps
+    pod/namespace/container/time attribution even for unformatted app logs.
+    """
+    command = [
+        "kubectl",
+    ]
+
+    if context:
+        command.extend(["--context", context])
+
+    if previous:
+        command.append("--previous")
+
+    command.extend(
+        [
+            "logs",
+            pod_name,
+            "-n",
+            namespace,
+            "-c",
+            container,
+            "--tail",
+            str(tail),
+        ]
+    )
+
+    if timestamps:
+        command.append("--timestamps")
+
+    return run_command(command)
+
+
+def get_pod_events_json(
+    namespace: str,
+    pod_name: str,
+    context: str | None = None,
+):
+    """
+    Read-only structured events for a pod (`kubectl get events -o json`),
+    for timeline-ready reason/type/timestamp extraction.
+    """
+    command = [
+        "kubectl",
+    ]
+
+    if context:
+        command.extend(["--context", context])
+
+    command.extend(
+        [
+            "get",
+            "events",
+            "-n",
+            namespace,
+            "--field-selector",
+            f"involvedObject.name={pod_name}",
+            "--sort-by=.metadata.creationTimestamp",
+            "-o",
+            "json",
+        ]
+    )
+
+    result = run_command(command)
+
+    if not result.get("success"):
+        return result
+
+    try:
+        data = json.loads(result.get("stdout", "{}"))
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "stderr": "unable to parse events json",
+        }
+
+    return {
+        "success": True,
+        "items": data.get("items", []) or [],
+    }
+
+
 def get_pod_state(
     namespace: str,
     pod_name: str,

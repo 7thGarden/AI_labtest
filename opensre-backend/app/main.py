@@ -11,6 +11,9 @@ from app.routes.yugabyte import router as yugabyte_router
 from app.routes.github import router as github_router
 from app.routes.chaos import router as chaos_router
 from app.routes.demo import router as demo_router
+from app.routes.db_investigation import router as db_investigation_router
+from app.routes.nginx import router as nginx_router
+from app.routes.nginx_demo import router as nginx_demo_router
 
 app = FastAPI(
     title="OpenSRE Backend",
@@ -36,6 +39,9 @@ app.include_router(yugabyte_router)
 app.include_router(github_router)
 app.include_router(chaos_router)
 app.include_router(demo_router)
+app.include_router(db_investigation_router)
+app.include_router(nginx_router)
+app.include_router(nginx_demo_router)
 
 
 @app.get("/")

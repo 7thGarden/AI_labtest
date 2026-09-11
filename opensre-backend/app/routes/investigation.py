@@ -53,16 +53,40 @@ def pod_evidence(
     namespace: str,
     pod_name: str,
     context: str | None = Query(default=None),
+    tail: int = Query(
+        default=200,
+        ge=10,
+        le=500,
+        description="Log lines fetched per container (current + previous when restarted).",
+    ),
+    signals_only: bool = Query(
+        default=False,
+        description="Return only the extracted log signals / structured events / timeline (lighter payload).",
+    ),
 ):
     """
     Collect structured Kubernetes + VictoriaMetrics evidence for a pod
     without running an AI investigation.
     """
-    return investigation.collect_pod_evidence(
+    result = investigation.collect_pod_evidence(
         namespace,
         pod_name,
         context,
+        tail=tail,
     )
+    if signals_only and result.get("success"):
+        k8s = (result.get("evidence") or {}).get("kubernetes") or {}
+        return {
+            "success": True,
+            "signals": {
+                "pod": (result.get("evidence") or {}).get("pod"),
+                "state": k8s.get("state"),
+                "log_analysis": k8s.get("log_analysis"),
+                "events_structured": k8s.get("events_structured"),
+                "timeline": k8s.get("timeline"),
+            },
+        }
+    return result
 
 
 @router.get("/evidence/target/{target_type}")
@@ -84,3 +108,15 @@ def stack_evidence(
     running an AI investigation.
     """
     return investigation.collect_stack_evidence(context)
+
+
+@router.get("/evidence/nginx")
+def nginx_evidence(
+    context: str | None = Query(default=None),
+    tail: int = Query(default=250, ge=10, le=2000),
+):
+    """
+    Collect structured Nginx + Kubernetes + VictoriaMetrics evidence
+    without running an AI investigation. Independent of databases.
+    """
+    return investigation.collect_nginx_evidence(context=context, tail=tail)

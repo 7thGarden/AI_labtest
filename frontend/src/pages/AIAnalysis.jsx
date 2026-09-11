@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { Link } from "react-router-dom";
-import api from "../api/api";
+import api, { dbInvestigationApi, nginxDemoApi } from "../api/api";
 import Card from "../components/Card";
 import Badge from "../components/Badge";
 import ProblemFraming from "../components/ProblemFraming";
@@ -18,14 +18,162 @@ import {
   Search,
   Target,
   Gauge,
-  ListChecks,
-  FileText,
-  Database,
+   ListChecks,
+   FileText,
+   Globe,
+   Database,
   HardDrive,
   Layers,
   GitCommit,
   ExternalLink,
+  Table,
+  AlertCircle,
+  CheckCircle,
+  XCircle,
 } from "lucide-react";
+
+function DatabaseEvidenceDisplay({ evidence, targetType }) {
+  const inv = evidence?.investigations || {};
+  const dbName = targetType === "yugabyte" ? "YugabyteDB" : "Aerospike";
+  const dbIcon = targetType === "yugabyte" ? <HardDrive size={16} /> : <Database size={16} />;
+
+  function renderInvestigationSection(title, data, renderItem) {
+    if (!data || !data.success) return null;
+    const items = data.data || [];
+    if (!items.length && typeof items !== "object") return null;
+    
+    const displayItems = Array.isArray(items) ? items : (items.data || items);
+    if (!displayItems || !displayItems.length) return null;
+
+    return (
+      <details className="raw-output" style={{ marginBottom: "var(--space-3)" }}>
+        <summary style={{ cursor: "pointer", fontWeight: 500, color: "var(--primary)" }}>
+          {dbIcon} {title} ({displayItems.length} items)
+        </summary>
+        <div style={{ marginTop: "var(--space-2)", fontSize: 12, fontFamily: "monospace" }}>
+          {Array.isArray(displayItems) ? (
+            displayItems.slice(0, 20).map((item, idx) => (
+              <div key={idx} style={{ padding: "var(--space-1) 0", borderBottom: "1px solid var(--border)" }}>
+                {renderItem(item)}
+              </div>
+            ))
+          ) : (
+            <pre className="code-block code-block--plain" style={{ maxHeight: 300, overflow: "auto" }}>
+              {JSON.stringify(displayItems, null, 2)}
+            </pre>
+          )}
+        </div>
+      </details>
+    );
+  }
+
+  function renderYugabyteItem(item) {
+    if (item.node_name) return `${item.node_name}: ${item.node_status} (leader: ${item.leader_count}, follower: ${item.follower_count})`;
+    if (item.total_connections !== undefined) return `Connections: total=${item.total_connections}, active=${item.active_connections}, idle=${item.idle_connections}, waiting=${item.waiting_connections}`;
+    if (item.query_preview) return `Query (${item.calls} calls, ${item.mean_exec_time?.toFixed(2)}ms avg): ${item.query_preview}`;
+    if (item.query) return `PID ${item.pid}: ${item.state} - ${item.query?.substring(0, 100)}`;
+    if (item.table_name) return `Table: ${item.table_name} (${item.total_size_bytes ? `${Math.round(item.total_size_bytes/1024)}KB` : 'no size'})`;
+    if (item.primary_key_duplicates) return `PK Duplicates: ${JSON.stringify(item.primary_key_duplicates)}`;
+    if (item.unexpected_nulls) return `Unexpected NULLs: ${JSON.stringify(item.unexpected_nulls)}`;
+    if (item.foreign_key_violations) return `FK Violations: ${JSON.stringify(item.foreign_key_violations)}`;
+    return JSON.stringify(item).substring(0, 200);
+  }
+
+  function renderAerospikeItem(item) {
+    // Cluster Health nodes
+    if (item.node_name) return `${item.node_name}: ${item.status} (client_conns: ${item.client_connections || 'N/A'}, objects: ${item.objects || 'N/A'}, uptime: ${item.uptime || 'N/A'}s)`;
+    // Cluster stats
+    if (item.stats) return `Cluster: ${Object.keys(item.stats).length} nodes reporting`;
+    // Namespaces - item is namespace object with stats and sets
+    if (item.namespace) return `Namespace: ${item.namespace} - Sets: ${item.sets?.join(', ') || 'none'}`;
+    // Record inspection
+    if (item.key) return `Record ${item.key}: ${JSON.stringify(item.bins)}`;
+    // Data integrity checks
+    if (item.missing_required_fields?.length) return `Missing fields: ${item.missing_required_fields.map(f => `${f.key}.${f.field}`).join(', ')}`;
+    if (item.duplicate_logical_records?.length) return `Duplicates: ${item.duplicate_logical_records.map(d => `${d.field}=${d.value}`).join(', ')}`;
+    if (item.invalid_field_values?.length) return `Invalid values: ${item.invalid_field_values.map(v => `${v.key}.${v.field}=${v.value}`).join(', ')}`;
+    // Latency info
+    if (item.node) return `${item.node}: reads=${item.total_read_ops}, writes=${item.total_write_ops}, read>1ms=${item.read_latency_gt_1ms}, write>1ms=${item.write_latency_gt_1ms}`;
+    // Demo set stats
+    if (item.objects !== undefined) return `Objects: ${item.objects}, Tombstones: ${item.tombstones}, Data: ${Math.round((item.data_used_bytes || 0)/1024)}KB`;
+    return JSON.stringify(item).substring(0, 200);
+  }
+
+  const renderItem = targetType === "yugabyte" ? renderYugabyteItem : renderAerospikeItem;
+
+  return (
+    <div className="stack" style={{ gap: "var(--space-3)" }}>
+      <div className="report-grid">
+        <div className="report-metric">
+          <div className="report-metric__label">Database</div>
+          <div className="report-metric__value cell-mono">{dbName}</div>
+        </div>
+        <div className="report-metric">
+          <div className="report-metric__label">Endpoint</div>
+          <div className="report-metric__value cell-mono">{evidence.endpoint}</div>
+        </div>
+        <div className="report-metric">
+          <div className="report-metric__label">Health</div>
+          <div className="report-metric__value">
+            <Badge tone={inv.health?.success ? "success" : "danger"}>
+              {inv.health?.success ? "Connected" : "Failed"}
+            </Badge>
+          </div>
+        </div>
+        <div className="report-metric">
+          <div className="report-metric__label">Investigations</div>
+          <div className="report-metric__value">{Object.keys(inv).filter(k => inv[k]?.success).length} / {Object.keys(inv).length}</div>
+        </div>
+      </div>
+
+      {targetType === "yugabyte" && (
+        <>
+          {renderInvestigationSection("Cluster Health", inv.cluster_health, renderItem)}
+          {renderInvestigationSection("Connections", inv.connections, renderItem)}
+          {renderInvestigationSection("Slow Queries", inv.slow_queries, renderItem)}
+          {renderInvestigationSection("Recent Errors", inv.recent_errors, renderItem)}
+          {renderInvestigationSection("Schema", inv.schema, (item) => `Table: ${item.table_name} (${item.columns?.length || 0} cols, ${item.constraints?.length || 0} constraints)`)}
+          {renderInvestigationSection("Table Statistics", inv.table_stats, (item) => `${item.table_name}: ${item.live_tuples} rows, ${item.dead_tuples} dead, ${Math.round((item.total_size_bytes || 0)/1024)}KB`)}
+          {renderInvestigationSection("Data Integrity", inv.data_integrity, (item) => {
+            const parts = [];
+            if (item.primary_key_duplicates?.length) parts.push(`PK Duplicates: ${item.primary_key_duplicates.reduce((sum, d) => sum + (d.duplicates?.length || 0), 0)}`);
+            if (item.unexpected_nulls?.length) parts.push(`NULLs: ${item.unexpected_nulls.length}`);
+            if (item.foreign_key_violations?.length) parts.push(`FK Violations: ${item.foreign_key_violations.length}`);
+            return parts.length ? parts.join(', ') : 'No issues detected';
+          })}
+          {renderInvestigationSection("Replication", inv.replication, renderItem)}
+        </>
+      )}
+
+      {targetType === "aerospike" && (
+        <>
+          {renderInvestigationSection("Cluster Health", inv.cluster_health, renderItem)}
+          {renderInvestigationSection("Namespaces", inv.namespaces, (item) => {
+            // item is the namespace data object with stats and sets
+            const sets = item.sets?.join(', ') || 'none';
+            const nodeCount = item.stats ? Object.keys(item.stats).length : 0;
+            return `Namespace: ${Object.keys(inv.namespaces?.data || {})[0] || 'test'} - ${nodeCount} nodes, Sets: ${sets}`;
+          })}
+          {renderInvestigationSection("Operation Errors", inv.operation_errors, (item) => {
+            if (item.connection_errors?.length) return `Connection Errors: ${item.connection_errors.map(e => `${e.node}: ${e.issue}`).join('; ')}`;
+            if (item.timeouts?.length) return `Timeouts: ${item.timeouts.map(e => `${e.node}: ${e.count}`).join('; ')}`;
+            if (item.server_errors?.length) return `Server Errors: ${item.server_errors.map(e => `${e.node}: ${e.issue}`).join('; ')}`;
+            return 'No errors detected';
+          })}
+          {renderInvestigationSection("Latency", inv.latency, renderItem)}
+          {renderInvestigationSection("Data Integrity", inv.data_integrity, (item) => {
+            const parts = [];
+            if (item.missing_required_fields?.length) parts.push(`Missing: ${item.missing_required_fields.length}`);
+            if (item.duplicate_logical_records?.length) parts.push(`Duplicates: ${item.duplicate_logical_records.length}`);
+            if (item.invalid_field_values?.length) parts.push(`Invalid: ${item.invalid_field_values.length}`);
+            return parts.length ? parts.join(', ') : `Scanned ${item.records_scanned} records - OK`;
+          })}
+          {renderInvestigationSection("Demo Set Stats", inv.demo_set_stats, renderItem)}
+        </>
+      )}
+    </div>
+  );
+}
 
 export default function AIAnalysis() {
   const [version, setVersion] = useState("");
@@ -39,6 +187,9 @@ export default function AIAnalysis() {
 
   const [targetType, setTargetType] = useSessionState("opensre:targetType", "pod");
   const [dbHealth, setDbHealth] = useState(null);
+  const [dbEvidence, setDbEvidence] = useState(null);
+  const [dbEvidenceLoading, setDbEvidenceLoading] = useState(false);
+  const [dbEvidenceError, setDbEvidenceError] = useState(null);
 
   const [investigation, setInvestigation] = useSessionState(
     "opensre:investigation",
@@ -50,6 +201,10 @@ export default function AIAnalysis() {
   );
   const [gitCorrelation, setGitCorrelation] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [nginxEvidence, setNginxEvidence] = useState(null);
+  const [nginxEvidenceLoading, setNginxEvidenceLoading] = useState(false);
+  const [nginxEvidenceError, setNginxEvidenceError] = useState(null);
+  const [nginxLoading, setNginxLoading] = useState(false);
 
   const [message, setMessage] = useState("");
   const [chat, setChat] = useSessionState("opensre:chat", []);
@@ -147,11 +302,37 @@ export default function AIAnalysis() {
   useEffect(() => {
     if (targetType === "pod") {
       setDbHealth(null);
+      setDbEvidence(null);
       return;
     }
 
     let cancelled = false;
     setDbHealth(null);
+    setDbEvidence(null);
+    setDbEvidenceError(null);
+
+    // Load database evidence for yugabyte/aerospike
+    if (targetType === "yugabyte" || targetType === "aerospike") {
+      setDbEvidenceLoading(true);
+      const evidenceApi = targetType === "yugabyte" 
+        ? dbInvestigationApi.yugabyteEvidence 
+        : dbInvestigationApi.aerospikeEvidence;
+      
+      evidenceApi()
+        .then((res) => {
+          if (!cancelled && res.data?.success) {
+            setDbEvidence(res.data.evidence);
+          } else if (!cancelled) {
+            setDbEvidenceError(res.data?.error || "Failed to load database evidence");
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) setDbEvidenceError(err.message || "Failed to load database evidence");
+        })
+        .finally(() => {
+          if (!cancelled) setDbEvidenceLoading(false);
+        });
+    }
 
     if (targetType === "stack") {
       Promise.all([
@@ -210,6 +391,10 @@ export default function AIAnalysis() {
         response = await api.get("/opensre/investigate/stack", {
           params: { context: cluster },
         });
+      } else if (targetType === "yugabyte") {
+        response = await dbInvestigationApi.opensreInvestigateYugabyte();
+      } else if (targetType === "aerospike") {
+        response = await dbInvestigationApi.opensreInvestigateAerospike();
       } else {
         response = await api.get(
           `/opensre/investigate/target/${targetType}`
@@ -249,6 +434,51 @@ export default function AIAnalysis() {
       setInvestigation({ error: err.message });
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function checkNginxEvidence() {
+    setNginxEvidenceLoading(true);
+    setNginxEvidenceError(null);
+    setNginxEvidence(null);
+    try {
+      const res = await nginxDemoApi.evidence();
+      if (res.data?.success) {
+        setNginxEvidence(res.data.evidence);
+      } else {
+        setNginxEvidenceError(res.data?.error || "Failed to collect Nginx evidence.");
+      }
+    } catch (err) {
+      setNginxEvidenceError(err.message || "Failed to collect Nginx evidence.");
+    } finally {
+      setNginxEvidenceLoading(false);
+    }
+  }
+
+  async function investigateNginx() {
+    setNginxLoading(true);
+    setInvestigation(null);
+    try {
+      const res = await nginxDemoApi.opensreInvestigate();
+      const data = res.data;
+      if (!data.success) {
+        setInvestigation({ error: data.stderr || data.error || "Nginx investigation failed." });
+        setGitCorrelation(null);
+      } else {
+        const stdout = stripAnsi(data.stdout || "");
+        setInvestigation({ stdout, report: extractReport(stdout) });
+        try {
+          const corrRes = await api.get("/investigation/git-correlation", { params: { limit: 10 } });
+          setGitCorrelation(corrRes.data.success ? corrRes.data : null);
+        } catch {
+          setGitCorrelation(null);
+        }
+      }
+      setInvestigationTarget("nginx");
+    } catch (err) {
+      setInvestigation({ error: err.message });
+    } finally {
+      setNginxLoading(false);
     }
   }
 
@@ -496,6 +726,109 @@ export default function AIAnalysis() {
           </p>
         )}
       </Card>
+
+      <Card
+        title="Nginx shortcut"
+        subtitle="Evidence collects in seconds — the OpenSRE call can take several minutes"
+        actions={
+          nginxEvidence?.nginx?.summary ? (
+            <Badge tone={(nginxEvidence.nginx.summary.http_5xx || 0) > 0 ? "warning" : "success"}>
+              5xx {nginxEvidence.nginx.summary.http_5xx ?? "—"} · 502 {nginxEvidence.nginx.summary.http_502 ?? "—"} · 504 {nginxEvidence.nginx.summary.http_504 ?? "—"}
+            </Badge>
+          ) : (
+            <Badge tone="neutral"><Globe size={11} /> nginx</Badge>
+          )
+        }
+      >
+        <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", alignItems: "center" }}>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={checkNginxEvidence}
+            disabled={nginxEvidenceLoading || nginxLoading}
+          >
+            {nginxEvidenceLoading ? <Loader2 size={14} className="btn__spinner" /> : <Table size={14} />}
+            Check Nginx evidence (fast)
+          </button>
+          <button
+            type="button"
+            className="btn btn--primary btn--sm"
+            onClick={investigateNginx}
+            disabled={nginxEvidenceLoading || nginxLoading}
+          >
+            {nginxLoading ? <Loader2 size={14} className="btn__spinner" /> : <Search size={14} />}
+            {nginxLoading ? "Investigating Nginx…" : "Investigate Nginx with OpenSRE"}
+          </button>
+          <Link to="/chaos" className="btn btn--ghost btn--sm">
+            <Globe size={13} /> Inject Nginx failure
+          </Link>
+        </div>
+        {nginxEvidenceError && (
+          <div className="alert alert--danger" style={{ marginTop: "var(--space-3)" }}>
+            {nginxEvidenceError}
+          </div>
+        )}
+        {nginxEvidence && (
+          <div className="text-muted" style={{ fontSize: 13, marginTop: "var(--space-3)" }}>
+            Health: {(nginxEvidence.nginx?.health?.status) || (nginxEvidence.nginx?.health_status) || "—"}
+            {" · "}Config: {String(nginxEvidence.nginx?.config_validation?.valid ?? nginxEvidence.nginx?.config_status ?? "—")}
+            {" · "}Conn refused: {nginxEvidence.nginx?.summary?.connection_refused ?? "—"}
+            {" · "}Timeouts: {nginxEvidence.nginx?.summary?.upstream_timeout ?? "—"}
+            {" · "}DNS: {nginxEvidence.nginx?.summary?.dns_failures ?? "—"}
+          </div>
+        )}
+        {nginxLoading && (
+          <div className="text-muted" style={{ fontSize: 13, marginTop: "var(--space-2)" }}>
+            Collecting Nginx + Kubernetes/metrics/GitHub evidence, then waiting on the OpenSRE model — this can take several minutes. Results appear in the Investigation report below.
+          </div>
+        )}
+      </Card>
+
+      {(targetType === "yugabyte" || targetType === "aerospike") && (
+        <Card
+          title="Database evidence"
+          subtitle="Live investigation data collected from the database"
+          actions={
+            dbEvidenceLoading ? (
+              <Badge tone="neutral">
+                <Loader2 size={12} className="btn__spinner" /> Collecting…
+              </Badge>
+            ) : dbEvidenceError ? (
+              <Badge tone="danger">
+                <AlertCircle size={12} /> Failed
+              </Badge>
+            ) : dbEvidence ? (
+              <Badge tone="success">
+                <CheckCircle size={12} /> Collected
+              </Badge>
+            ) : (
+              <Badge tone="neutral">Not loaded</Badge>
+            )
+          }
+        >
+          {dbEvidenceLoading ? (
+            <div className="stack stack--tight">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="skeleton" style={{ height: 44, borderRadius: 4 }} />
+              ))}
+            </div>
+          ) : dbEvidenceError ? (
+            <div className="empty-state">
+              <AlertCircle size={26} />
+              <div>
+                <strong>Evidence collection failed</strong>
+                <p style={{ marginTop: "var(--space-1)" }}>{dbEvidenceError}</p>
+              </div>
+            </div>
+          ) : dbEvidence ? (
+            <DatabaseEvidenceDisplay evidence={dbEvidence} targetType={targetType} />
+          ) : (
+            <div className="empty-state">
+              <Table size={26} /> Waiting for evidence…
+            </div>
+          )}
+        </Card>
+      )}
 
       {investigation && (
         <Card

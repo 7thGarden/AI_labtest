@@ -33,5 +33,9 @@ class Settings:
     GITHUB_REPO = os.getenv("GITHUB_REPO", "")
     GITHUB_API_URL = os.getenv("GITHUB_API_URL", "https://api.github.com")
 
+    NGINX_NAMESPACE = os.getenv("NGINX_NAMESPACE", "opensre")
+    NGINX_LABEL = os.getenv("NGINX_LABEL", "app=nginx")
+    NGINX_CONTAINER_NAME = os.getenv("NGINX_CONTAINER_NAME", "nginx")
+
 
 settings = Settings()

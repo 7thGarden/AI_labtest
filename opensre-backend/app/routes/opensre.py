@@ -102,11 +102,13 @@ def investigate_pod(
     namespace: str,
     pod_name: str,
     context: str | None = None,
+    tail: int = 200,
 ):
     evidence_result = investigation.collect_pod_evidence(
         namespace,
         pod_name,
         context,
+        tail=max(10, min(tail, 500)),
     )
 
     if not evidence_result.get("success"):
