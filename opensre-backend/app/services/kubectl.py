@@ -195,7 +195,17 @@ def get_pod_endpoint(
         ]
     )
 
-    return run_command(command)
+    result = run_command(command)
+    endpoint = (result.get("stdout") or "").strip()
+
+    if result.get("success") and endpoint:
+        ip, _, port = endpoint.partition(":")
+        if not port:
+            result["stdout"] = ip
+        else:
+            result["stdout"] = f"{ip}:{port}"
+
+    return result
 
 
 def get_first_pod_by_label(
@@ -255,6 +265,98 @@ def get_pod_logs(
     )
 
     return run_command(command)
+
+
+def get_pod_logs_container(
+    namespace: str,
+    pod_name: str,
+    container: str,
+    tail: int = 200,
+    previous: bool = False,
+    context: str | None = None,
+    timestamps: bool = True,
+):
+    """
+    Read-only container logs for one container (`kubectl logs -c`).
+    `timestamps=True` prepends server-side timestamps so evidence keeps
+    pod/namespace/container/time attribution even for unformatted app logs.
+    """
+    command = [
+        "kubectl",
+    ]
+
+    if context:
+        command.extend(["--context", context])
+
+    if previous:
+        command.append("--previous")
+
+    command.extend(
+        [
+            "logs",
+            pod_name,
+            "-n",
+            namespace,
+            "-c",
+            container,
+            "--tail",
+            str(tail),
+        ]
+    )
+
+    if timestamps:
+        command.append("--timestamps")
+
+    return run_command(command)
+
+
+def get_pod_events_json(
+    namespace: str,
+    pod_name: str,
+    context: str | None = None,
+):
+    """
+    Read-only structured events for a pod (`kubectl get events -o json`),
+    for timeline-ready reason/type/timestamp extraction.
+    """
+    command = [
+        "kubectl",
+    ]
+
+    if context:
+        command.extend(["--context", context])
+
+    command.extend(
+        [
+            "get",
+            "events",
+            "-n",
+            namespace,
+            "--field-selector",
+            f"involvedObject.name={pod_name}",
+            "--sort-by=.metadata.creationTimestamp",
+            "-o",
+            "json",
+        ]
+    )
+
+    result = run_command(command)
+
+    if not result.get("success"):
+        return result
+
+    try:
+        data = json.loads(result.get("stdout", "{}"))
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "stderr": "unable to parse events json",
+        }
+
+    return {
+        "success": True,
+        "items": data.get("items", []) or [],
+    }
 
 
 def get_pod_state(
@@ -357,4 +459,122 @@ def get_pod_state(
             "pod_ip": pod.get("status", {}).get("podIP"),
             "containers": containers,
         },
+    }
+
+
+def get_node_state(node_name: str, context: str | None = None):
+    """Structured node state: conditions, allocatable resources, capacity, unschedulable."""
+    command = ["kubectl"]
+    if context:
+        command.extend(["--context", context])
+    command.extend(["get", "node", node_name, "-o", "json"])
+
+    result = run_command(command)
+    if not result.get("success"):
+        return result
+
+    try:
+        node = json.loads(result.get("stdout", "{}"))
+    except (TypeError, ValueError):
+        return {"success": False, "stderr": "unable to parse node json"}
+
+    conditions = []
+    for cond in node.get("status", {}).get("conditions", []) or []:
+        conditions.append({
+            "type": cond.get("type"),
+            "status": cond.get("status"),
+            "reason": cond.get("reason"),
+            "message": (cond.get("message") or "")[:300],
+            "last_transition": cond.get("lastTransitionTime"),
+        })
+
+    return {
+        "success": True,
+        "node": {
+            "name": node_name,
+            "unschedulable": node.get("spec", {}).get("unschedulable", False),
+            "capacity": node.get("status", {}).get("capacity", {}),
+            "allocatable": node.get("status", {}).get("allocatable", {}),
+            "conditions": conditions,
+            "addresses": [
+                {"type": a.get("type"), "address": a.get("address")}
+                for a in node.get("status", {}).get("addresses", []) or []
+            ],
+        },
+    }
+
+
+def cordon_node(node_name: str, context: str | None = None):
+    command = ["kubectl"]
+    if context:
+        command.extend(["--context", context])
+    command.extend(["cordon", node_name])
+    return run_command(command)
+
+
+def uncordon_node(node_name: str, context: str | None = None):
+    command = ["kubectl"]
+    if context:
+        command.extend(["--context", context])
+    command.extend(["uncordon", node_name])
+    return run_command(command)
+
+
+def drain_node(node_name: str, context: str | None = None, grace_period: int = 30):
+    command = ["kubectl"]
+    if context:
+        command.extend(["--context", context])
+    command.extend([
+        "drain", node_name,
+        "--ignore-daemonsets",
+        "--delete-emptydir-data",
+        "--grace-period", str(grace_period),
+        "--force",
+    ])
+    return run_command(command)
+
+
+def get_node_resource_usage(node_name: str, context: str | None = None):
+    """Get pods on a node and summarize resource usage."""
+    command = ["kubectl"]
+    if context:
+        command.extend(["--context", context])
+    command.extend([
+        "get", "pods", "-A", "--field-selector", f"spec.nodeName={node_name}",
+        "-o", "json",
+    ])
+
+    result = run_command(command)
+    if not result.get("success"):
+        return result
+
+    try:
+        data = json.loads(result.get("stdout", "{}"))
+    except (TypeError, ValueError):
+        return {"success": False, "stderr": "unable to parse pods json"}
+
+    pods = []
+    restarts_total = 0
+    for item in data.get("items", []) or []:
+        restarts = sum(
+            cs.get("restartCount", 0)
+            for cs in item.get("status", {}).get("containerStatuses", []) or []
+        )
+        restarts_total += restarts
+        phase = item.get("status", {}).get("phase", "Unknown")
+        ns = item.get("metadata", {}).get("namespace", "")
+        name = item.get("metadata", {}).get("name", "")
+        pods.append({
+            "namespace": ns,
+            "name": name,
+            "phase": phase,
+            "restarts": restarts,
+        })
+
+    return {
+        "success": True,
+        "node": node_name,
+        "pod_count": len(pods),
+        "restarts_total": restarts_total,
+        "pods": pods,
     }

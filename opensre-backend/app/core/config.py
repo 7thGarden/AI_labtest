@@ -33,5 +33,21 @@ class Settings:
     GITHUB_REPO = os.getenv("GITHUB_REPO", "")
     GITHUB_API_URL = os.getenv("GITHUB_API_URL", "https://api.github.com")
 
+    NGINX_NAMESPACE = os.getenv("NGINX_NAMESPACE", "opensre")
+    NGINX_LABEL = os.getenv("NGINX_LABEL", "app=nginx")
+    NGINX_CONTAINER_NAME = os.getenv("NGINX_CONTAINER_NAME", "nginx")
+
+    ELASTICSEARCH_URL = os.getenv("ELASTICSEARCH_URL", "http://localhost:9200")
+    ELASTICSEARCH_TIMEOUT = int(os.getenv("ELASTICSEARCH_TIMEOUT", "10"))
+    ELASTICSEARCH_INDEX_PATTERN = os.getenv("ELASTICSEARCH_INDEX_PATTERN", "logs-opensre-*")
+
+    COREDNS_NAMESPACE = os.getenv("COREDNS_NAMESPACE", "kube-system")
+    COREDNS_LABEL = os.getenv("COREDNS_LABEL", "k8s-app=kube-dns")
+    COREDNS_DEPLOYMENT = os.getenv("COREDNS_DEPLOYMENT", "coredns")
+    COREDNS_PROBE_TARGET = os.getenv(
+        "COREDNS_PROBE_TARGET",
+        "kubernetes.default.svc.cluster.local",
+    )
+
 
 settings = Settings()

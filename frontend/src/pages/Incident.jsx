@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import api from "../api/api";
 import Card from "../components/Card";
 import Badge from "../components/Badge";
@@ -37,6 +37,15 @@ const METRIC_ITEMS = [
   { key: "memory", label: "Resident memory", unit: "bytes" },
   { key: "cpu", label: "CPU seconds", unit: "seconds" },
   { key: "requests", label: "HTTP requests", unit: "count" },
+];
+
+const POD_METRIC_ITEMS = [
+  { key: "request_rate_rps", label: "Request rate", unit: "req/s" },
+  { key: "error_rate_5xx_per_s", label: "5xx error rate", unit: "errors/s" },
+  { key: "error_share_percent", label: "5xx error share", unit: "%" },
+  { key: "p50_latency_seconds", label: "P50 latency", unit: "seconds" },
+  { key: "p95_latency_seconds", label: "P95 latency", unit: "seconds" },
+  { key: "p99_latency_seconds", label: "P99 latency", unit: "seconds" },
 ];
 
 const SEVERITY_LABEL = {
@@ -125,6 +134,27 @@ export default function Incident() {
 
   const [report, setReport] = useSessionState("opensre:incidentReport", null);
   const [generating, setGenerating] = useState(false);
+
+  const [investigationHistory, setInvestigationHistory] = useSessionState(
+    "opensre:investigationHistory",
+    []
+  );
+  const [expandedHistoryIdx, setExpandedHistoryIdx] = useState(null);
+
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Deep-link support: /incident?namespace=<ns>&pod=<name> (e.g. from the
+  // Chaos failure-injection page) pre-selects the incident target once.
+  useEffect(() => {
+    const ns = searchParams.get("namespace");
+    const pod = searchParams.get("pod");
+    if (ns || pod) {
+      if (ns) setNamespace(ns);
+      if (pod) setPodName(pod);
+      setSearchParams({}, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const initialLoadRef = useRef({
     clusters: clusters.length,
@@ -245,7 +275,18 @@ export default function Incident() {
         });
       } else {
         const stdout = stripAnsi(data.stdout || "");
-        setInvestigation({ stdout, report: extractReport(stdout) });
+        const reportData = extractReport(stdout);
+        setInvestigation({ stdout, report: reportData });
+
+        const entry = {
+          id: Date.now(),
+          pod: podName,
+          namespace,
+          timestamp: new Date().toISOString(),
+          report: reportData,
+          stdout,
+        };
+        setInvestigationHistory((prev) => [entry, ...prev]);
       }
     } catch (err) {
       console.error("Investigation failed:", err);
@@ -286,6 +327,11 @@ export default function Incident() {
   const events = parseEvents(evidence?.kubernetes?.events || "");
   const endpoint = evidence?.kubernetes?.endpoint;
   const metrics = evidence?.metrics || {};
+  const logAnalysis = evidence?.kubernetes?.log_analysis || null;
+  const relevantLogLines = logAnalysis?.relevant_lines || [];
+  const signalCounts = logAnalysis?.signal_counts || {};
+  const structuredEvents = evidence?.kubernetes?.events_structured || [];
+  const timeline = evidence?.kubernetes?.timeline || [];
 
   const reportObj = investigationMatches ? investigation.report : null;
   const validityScore =
@@ -297,7 +343,7 @@ export default function Incident() {
     reportObj ? extractRecommendedActions(reportObj) : [];
 
   function metricsRows() {
-    return METRIC_ITEMS.map(({ key, label, unit }) => {
+    const rows = METRIC_ITEMS.map(({ key, label, unit }) => {
       const entry = metrics[key];
 
       if (!entry || entry.success === false) {
@@ -334,6 +380,21 @@ export default function Incident() {
           .join(" · "),
       };
     });
+
+    const podMetrics = metrics.pod || {};
+    POD_METRIC_ITEMS.forEach(({ key, label, unit }) => {
+      const value = podMetrics[key];
+      if (value != null) {
+        rows.push({
+          key: `pod_${key}`,
+          label,
+          status: "ok",
+          detail: formatMetricValue(value, unit === "req/s" || unit === "errors/s" ? "" : unit),
+        });
+      }
+    });
+
+    return rows;
   }
 
   function buildReport() {
@@ -435,6 +496,25 @@ export default function Incident() {
       evidence?.kubernetes?.events
         ? "```\n" + evidence.kubernetes.events.trimEnd() + "\n```"
         : "_Pod events unavailable._",
+      "",
+      "### Relevant log signals",
+      "",
+      (evidence?.kubernetes?.log_analysis?.relevant_lines || []).length
+        ? evidence.kubernetes.log_analysis.relevant_lines
+            .map(
+              (e) =>
+                `- [${e.container || "?"}${e.previous ? "/previous" : ""}][${e.signal}]${e.ts ? ` ${e.ts}` : ""} ${e.line}`
+            )
+            .join("\n")
+        : "_No ERROR / exception / connection / timeout signals found._",
+      "",
+      "### Timeline",
+      "",
+      (evidence?.kubernetes?.timeline || []).length
+        ? evidence.kubernetes.timeline
+            .map((t) => `- ${t.ts || "—"} [${t.source}] ${t.text}`)
+            .join("\n")
+        : "_No timeline entries._",
       "",
       "## Metrics",
       "",
@@ -787,6 +867,73 @@ export default function Incident() {
                     </div>
                   )}
                 </div>
+
+                <div className="report-section">
+                  <div className="report-section__title">
+                    Relevant pod logs{" "}
+                    {Object.keys(signalCounts).length > 0 && (
+                      <span className="text-muted" style={{ fontWeight: 400 }}>
+                        ({Object.entries(signalCounts).map(([s, c]) => `${s}=${c}`).join(", ")})
+                      </span>
+                    )}
+                  </div>
+                  {relevantLogLines.length === 0 ? (
+                    <p className="text-muted">
+                      No ERROR / exception / connection / timeout signals in the
+                      collected logs{logAnalysis ? "" : " (log analysis unavailable)"}.
+                      {(logAnalysis?.per_container || []).length > 0 && (
+                        <> Checked: {logAnalysis.per_container.map((c) => `${c.container}${c.previous_available ? " (+previous)" : ""}`).join(", ")}</>
+                      )}
+                    </p>
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Container</th>
+                            <th>Signal</th>
+                            <th>Timestamp</th>
+                            <th>Line</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {relevantLogLines.map((entry, index) => (
+                            <tr key={index}>
+                              <td className="cell-mono cell-muted">
+                                {entry.container || "—"}
+                                {entry.previous ? " (prev)" : ""}
+                              </td>
+                              <td>
+                                <Badge tone="danger">{entry.signal}</Badge>
+                              </td>
+                              <td className="cell-mono cell-muted">
+                                {entry.ts || "—"}
+                              </td>
+                              <td className="cell-mono">{entry.line}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {timeline.length > 0 && (
+                  <div className="report-section">
+                    <div className="report-section__title">Timeline</div>
+                    <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+                      {timeline.map((item, index) => (
+                        <li key={index} style={{ display: "flex", gap: "var(--space-2)", fontSize: 13, alignItems: "baseline" }}>
+                          <span className="cell-mono cell-muted" style={{ whiteSpace: "nowrap" }}>
+                            {item.ts || "—"}
+                          </span>
+                          <Badge tone={item.source === "event" ? "warning" : "danger"}>{item.source}</Badge>
+                          <span>{item.text}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="empty-state">
@@ -797,7 +944,7 @@ export default function Incident() {
 
           <Card
             title="Metrics"
-            subtitle="VictoriaMetrics series for the selected pod"
+            subtitle="VictoriaMetrics data for the selected pod"
             actions={
               <Badge tone="info">
                 <Activity size={12} /> {endpoint || "no endpoint"}
@@ -1039,6 +1186,119 @@ export default function Incident() {
               </div>
             )}
           </Card>
+
+          {investigationHistory.length > 0 && (
+            <Card
+              title="Investigation history"
+              subtitle={`${investigationHistory.length} past investigation${investigationHistory.length === 1 ? "" : "s"} stored`}
+              actions={
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => setInvestigationHistory([])}
+                >
+                  Clear history
+                </button>
+              }
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+                {investigationHistory.map((entry, idx) => {
+                  const isExpanded = expandedHistoryIdx === idx;
+                  const rootCause = entry.report?.root_cause;
+                  const validity = entry.report?.validity_score != null
+                    ? Math.round(entry.report.validity_score * 100)
+                    : null;
+                  const ts = new Date(entry.timestamp);
+                  return (
+                    <div
+                      key={entry.id}
+                      style={{
+                        border: "1px solid var(--border)",
+                        borderRadius: 6,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setExpandedHistoryIdx(isExpanded ? null : idx)}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "var(--space-2)",
+                          width: "100%",
+                          padding: "var(--space-3)",
+                          background: isExpanded ? "var(--bg-muted)" : "transparent",
+                          border: "none",
+                          cursor: "pointer",
+                          textAlign: "left",
+                          fontSize: 13,
+                        }}
+                      >
+                        <Badge tone={rootCause ? "success" : "warning"}>
+                          {rootCause ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+                          {" "}{rootCause ? "Analyzed" : "Inconclusive"}
+                        </Badge>
+                        <span style={{ fontWeight: 500 }}>{entry.namespace}/{entry.pod}</span>
+                        <span className="text-muted" style={{ marginLeft: "auto" }}>
+                          {ts.toLocaleDateString()} {ts.toLocaleTimeString()}
+                        </span>
+                        {validity != null && (
+                          <Badge tone={validity >= 75 ? "success" : validity >= 40 ? "warning" : "danger"}>
+                            {validity}%
+                          </Badge>
+                        )}
+                      </button>
+                      {isExpanded && (
+                        <div style={{
+                          padding: "0 var(--space-3) var(--space-3)",
+                          borderTop: "1px solid var(--border)",
+                          fontSize: 13,
+                        }}>
+                          {rootCause && (
+                            <div style={{ marginBottom: "var(--space-2)" }}>
+                              <strong>Root cause:</strong> {rootCause}
+                            </div>
+                          )}
+                          {entry.report?.summary && (
+                            <div style={{ marginBottom: "var(--space-2)" }}>
+                              <strong>Summary:</strong> {stripAnsi(entry.report.summary)}
+                            </div>
+                          )}
+                          {entry.report?.impact && (
+                            <div style={{ marginBottom: "var(--space-2)" }}>
+                              <strong>Impact:</strong> {entry.report.impact}
+                            </div>
+                          )}
+                          {entry.report?.evidence && (
+                            <div style={{ marginBottom: "var(--space-2)" }}>
+                              <strong>Evidence:</strong>
+                              {Array.isArray(entry.report.evidence) ? (
+                                <ul style={{ margin: "var(--space-1) 0 0 var(--space-4)" }}>
+                                  {entry.report.evidence.map((item, i) => (
+                                    <li key={i}>{item}</li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <span> {entry.report.evidence}</span>
+                              )}
+                            </div>
+                          )}
+                          {entry.stdout && (
+                            <details className="raw-output" style={{ marginTop: "var(--space-2)" }}>
+                              <summary>
+                                <Terminal size={14} style={{ verticalAlign: "middle" }} /> Raw CLI output
+                              </summary>
+                              <pre className="code-block">{entry.stdout}</pre>
+                            </details>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
         </>
       )}
 

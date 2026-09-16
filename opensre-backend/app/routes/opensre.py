@@ -102,19 +102,33 @@ def investigate_pod(
     namespace: str,
     pod_name: str,
     context: str | None = None,
+    tail: int = 200,
 ):
     evidence_result = investigation.collect_pod_evidence(
         namespace,
         pod_name,
         context,
+        tail=max(10, min(tail, 500)),
     )
 
     if not evidence_result.get("success"):
         return evidence_result
 
-    return opensre_cli.investigate(
-        evidence_result["evidence"]
-    )
+    # Run investigation via CLI to get the markdown report
+    cli_result = opensre_cli.investigate(evidence_result["evidence"])
+
+    # Enrich the response with VictoriaMetrics pod metrics and ES log signals
+    enriched = {
+        "success": cli_result.get("success"),
+        "stdout": cli_result.get("stdout"),
+        "stderr": cli_result.get("stderr"),
+        "returncode": cli_result.get("returncode"),
+        # VictoriaMetrics pod metrics (request rate, error rate, latency percentiles)
+        "vm_metrics": evidence_result.get("evidence", {}).get("metrics", {}).get("pod", {}),
+        # Elasticsearch log signals (ERROR/EXCEPTION/TIMEOUT counts + sample logs)
+        "es_signals": evidence_result.get("evidence", {}).get("elasticsearch", {}),
+    }
+    return enriched
 
 
 @router.get("/investigate/target/{target_type}")
@@ -145,6 +159,51 @@ def investigate_stack(
     )
 
 
+@router.get("/investigate/coredns")
+def investigate_coredns(
+    context: str | None = None,
+    tail: int = 150,
+):
+    evidence_result = investigation.collect_coredns_evidence(
+        context,
+        tail=max(10, min(tail, 1000)),
+    )
+
+    if not evidence_result.get("success"):
+        return evidence_result
+
+    return opensre_cli.investigate(
+        evidence_result["evidence"]
+    )
+
+
+@router.get("/investigate/elk")
+def investigate_elk(
+    namespace: str | None = None,
+    pod: str | None = None,
+    service: str | None = None,
+    since_minutes: int = 60,
+):
+    evidence_result = investigation.collect_elasticsearch_evidence(
+        namespace=namespace, pod=pod, service=service,
+        since_minutes=since_minutes,
+    )
+    if not evidence_result.get("success"):
+        return evidence_result
+    evidence = evidence_result["evidence"]
+    summ = evidence.get("elasticsearch", {}).get("summary", {}) or {}
+    evidence["question"] = (
+        "Investigate ELK/Evidence layer for ERROR/EXCEPTION/FAILED/"
+        "CONNECTION REFUSED/TIMEOUT patterns. "
+        f"Error summary: {summ}. "
+        "Correlate Elasticsearch log evidence with Kubernetes, "
+        "VictoriaMetrics, nginx, CoreDNS, database and GitHub evidence. "
+        "Provide root cause, confidence, evidence, timeline, "
+        "affected component, and remediation."
+    )
+    return opensre_cli.investigate(evidence)
+
+
 @router.post("/chat")
 def chat(request: ChatRequest):
     # Host service target (Aerospike / YugabyteDB) selected in the UI.
@@ -153,6 +212,12 @@ def chat(request: ChatRequest):
             evidence_result = investigation.collect_stack_evidence(
                 request.cluster
             )
+        elif request.target_type == "coredns":
+            evidence_result = investigation.collect_coredns_evidence(
+                request.cluster
+            )
+        elif request.target_type == "elk":
+            evidence_result = investigation.collect_elasticsearch_evidence()
         else:
             evidence_result = investigation.collect_target_evidence(
                 request.target_type

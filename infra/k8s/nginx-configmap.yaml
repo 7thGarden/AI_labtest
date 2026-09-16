@@ -1,0 +1,84 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: opensre
+data:
+  nginx.conf: |
+    worker_processes auto;
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+
+    events {
+        worker_connections 1024;
+    }
+
+    http {
+        include       /etc/nginx/mime.types;
+        default_type  application/octet-stream;
+
+        # Structured access log with upstream timing for investigation
+        # Includes: status, request_time, upstream_response_time, upstream_addr
+        log_format main '$remote_addr - $remote_user [$time_local] '
+                        '"$request" $status $body_bytes_sent '
+                        '"$http_referer" "$http_user_agent" '
+                        'rt=$request_time uct="$upstream_response_time" '
+                        'uaddr="$upstream_addr" upstream_status="$upstream_status" '
+                        'host="$host"';
+
+        access_log /var/log/nginx/access.log main;
+
+        sendfile        on;
+        keepalive_timeout 65;
+
+        # Health endpoint for config validation / readiness
+        server {
+            listen 8080;
+            location /nginx-health {
+                access_log off;
+                return 200 "healthy\n";
+                add_header Content-Type text/plain;
+            }
+            location /nginx-status {
+                stub_status on;
+                access_log off;
+                allow 127.0.0.1;
+                deny all;
+            }
+        }
+
+        upstream catalog-api {
+            server catalog-api.opensre.svc.cluster.local:8000 max_fails=2 fail_timeout=10s;
+        }
+
+        server {
+            listen 80;
+            server_name _;
+
+            # Readiness probe
+            location /healthz {
+                access_log off;
+                return 200 "ok\n";
+                add_header Content-Type text/plain;
+            }
+
+            location / {
+                proxy_pass http://catalog-api;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Request-ID $request_id;
+
+                proxy_connect_timeout 5s;
+                proxy_read_timeout 10s;
+                proxy_next_upstream error timeout http_502 http_503 http_504;
+                proxy_next_upstream_timeout 8s;
+            }
+
+            # Metrics / debug: expose nginx -t validation result via error log
+            error_page 502 /502.html;
+            location = /502.html {
+                internal;
+            }
+        }
+    }

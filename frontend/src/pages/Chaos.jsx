@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import api from "../api/api";
+import { Link } from "react-router-dom";
+import api, { dbInvestigationApi, nginxDemoApi, corednsDemoApi, elkDemoApi, elkApi } from "../api/api";
 import Card from "../components/Card";
 import Badge from "../components/Badge";
 import {
@@ -16,6 +17,12 @@ import {
   Timer,
   Activity,
   ListChecks,
+  Copy,
+  Trash2,
+  AlertCircle,
+  Globe,
+  ChevronDown,
+  Search,
 } from "lucide-react";
 
 const FAILURES = [
@@ -28,6 +35,12 @@ const FAILURES = [
   { action: "pod-latency", label: "Latency spike (catalog)", desc: "add +5s latency to catalog-api traffic", icon: Timer, risk: "pod" },
   { action: "flaky-latency", label: "Latency spike (flaky)", desc: "add +3s latency to flaky-service traffic", icon: Timer, risk: "pod" },
   { action: "system-pod-kill", label: "Kill system pod", desc: "delete a kube-system pod (coredns)", icon: Server, risk: "cluster" },
+  { action: "coredns-kill", label: "CoreDNS pod kill", desc: "delete one CoreDNS pod (self-heals)", icon: Globe, risk: "dns" },
+  { action: "coredns-down", label: "CoreDNS down", desc: "scale CoreDNS to 0 (DNS outage)", icon: Globe, risk: "dns" },
+  { action: "coredns-latency", label: "DNS latency", desc: "netem delay — DNS probe slows", icon: Timer, risk: "dns" },
+  { action: "elk-error", label: "ELK error signal", desc: "inject ERROR/EXCEPTION logs", icon: AlertCircle, risk: "elk" },
+  { action: "elk-connection-refused", label: "ELK connection refused", desc: "inject CONNECTION REFUSED logs", icon: AlertCircle, risk: "elk" },
+  { action: "elk-timeout", label: "ELK timeout", desc: "inject TIMEOUT/TIMED OUT logs", icon: AlertCircle, risk: "elk" },
   { action: "node-cordon", label: "Cordon node", desc: "mark worker unschedulable", icon: Server, risk: "cluster" },
   { action: "node-drain", label: "Drain node", desc: "evict all pods off the worker", icon: Server, risk: "cluster" },
   { action: "node-network-latency", label: "Node network latency", desc: "netem delay on worker egress", icon: Activity, risk: "cluster" },
@@ -39,6 +52,9 @@ const RECOVERY = [
   { action: "latency-off", label: "Clear catalog latency", icon: Timer },
   { action: "flaky-latency-off", label: "Clear flaky latency", icon: Timer },
   { action: "network-latency-off", label: "Clear netem delay", icon: Activity },
+  { action: "coredns-up", label: "CoreDNS up", icon: Globe },
+  { action: "coredns-latency-off", label: "Clear DNS latency", icon: Timer },
+  { action: "elk-recover", label: "Clear ELK demo", icon: Search },
   { action: "uncordon", label: "Uncordon node", icon: Server },
   { action: "all", label: "Recover all", icon: RotateCcw },
 ];
@@ -83,18 +99,32 @@ export default function Chaos() {
   const [gdRunning, setGdRunning] = useState(false);
   const [gdReport, setGdReport] = useState(null);
   const [gdError, setGdError] = useState(null);
+  const [nginxState, setNginxState] = useState(null);
+  const [nginxHealth, setNginxHealth] = useState(null);
+  const [corednsState, setCorednsState] = useState(null);
+  const [elkState, setElkState] = useState(null);
+  const [k8sPod, setK8sPod] = useState("");
+  const [k8sInvestigating, setK8sInvestigating] = useState(false);
 
   const refreshStatus = async () => {
     try {
-      const [s, a, h] = await Promise.all([
+      const [s, a, h, ns, nh, cs, es] = await Promise.all([
         api.get("/chaos/status"),
         api.get("/chaos/active"),
         api.get("/chaos/history"),
+        nginxDemoApi.status().catch(() => ({ data: null })),
+        nginxDemoApi.health().catch(() => ({ data: null })),
+        corednsDemoApi.status().catch(() => ({ data: null })),
+        elkDemoApi.status().catch(() => ({ data: null })),
       ]);
       if (s.data.success) setStatus(s.data);
       else setError(s.data.error);
       setActiveFaults(a.data.data || {});
       setHistory(h.data.data || []);
+      if (ns?.data?.success) setNginxState(ns.data);
+      if (nh?.data) setNginxHealth(nh.data);
+      if (cs?.data?.success) setCorednsState(cs.data);
+      if (es?.data?.success) setElkState(es.data);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -130,6 +160,179 @@ export default function Chaos() {
     } catch (e) {
       setError(e.message);
     } finally {
+      setRunning(null);
+      refreshStatus();
+    }
+  };
+
+  const NGINX_MODES = [
+    { mode: "unavailable", label: "Timeout 504", desc: "upstream timeout — proxied server too slow", status: "504" },
+    { mode: "dns", label: "DNS 502", desc: "upstream DNS failure — host not found", status: "502" },
+    { mode: "invalid_config", label: "Invalid config 500", desc: "nginx config error — invalid directive", status: "500" },
+  ];
+
+  const runNginx = async (op, mode, label) => {
+    if (
+      !confirm(
+        `Run "${label}"?\n\nThis injects a reversible Nginx failure (mode=${mode}) for OpenSRE investigation. Recover with "Recover Nginx".`
+      )
+    )
+      return;
+
+    setRunning(`nginx:${op}:${mode}`);
+    setError(null);
+    setLog("");
+    try {
+      const res =
+        op === "fail"
+          ? await nginxDemoApi.fail(mode)
+          : op === "investigate"
+            ? await nginxDemoApi.investigate(mode)
+            : await nginxDemoApi.recover(mode);
+      if (res.data.success) {
+        const summary = res.data.evidence?.nginx?.summary;
+        setLog(
+          (res.data.result?.stdout ||
+            res.data.recovery?.kubectl_result?.stdout ||
+            res.data.opensre?.stdout ||
+            JSON.stringify(res.data, null, 2)) +
+            (summary ? `\n\nNginx summary: 5xx=${summary.http_5xx} 502=${summary.http_502} 503=${summary.http_503} 504=${summary.http_504}` : "")
+        );
+      } else {
+        setError(res.data.error || "Nginx action failed");
+        setLog(JSON.stringify(res.data, null, 2));
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setRunning(null);
+      refreshStatus();
+    }
+  };
+
+  const COREDNS_MODES = [
+    { mode: "kill", label: "Pod kill", desc: "delete one CoreDNS pod — self-heals, restart evidence" },
+    { mode: "down", label: "Down (scale 0)", desc: "sustained DNS outage until recovery" },
+    { mode: "latency", label: "Latency", desc: "DNS probe slows until recovery" },
+  ];
+
+  const runCoredns = async (op, mode, label) => {
+    if (
+      !confirm(
+        `Run "${label}"?\n\nThis injects a reversible CoreDNS failure (mode=${mode}) in the demo cluster for OpenSRE investigation. Recover with "Recover CoreDNS".`
+      )
+    )
+      return;
+
+    setRunning(`coredns:${op}:${mode}`);
+    setError(null);
+    setLog("");
+    try {
+      const res =
+        op === "fail"
+          ? await corednsDemoApi.fail(mode)
+          : op === "investigate"
+            ? await corednsDemoApi.investigate(mode)
+            : await corednsDemoApi.recover(mode);
+      if (res.data.success) {
+        const summary = res.data.evidence?.coredns?.summary || res.data.summary;
+        setLog(
+          (res.data.result?.stdout ||
+            res.data.recovery?.kubectl_result?.stdout ||
+            res.data.opensre?.stdout ||
+            JSON.stringify(res.data, null, 2)) +
+            (summary ? `\n\nCoreDNS summary: health=${summary.health_status} probe=${summary.probe_verdict} SERVFAIL=${summary.servfail} timeouts=${summary.dns_timeouts}` : "")
+        );
+      } else {
+        setError(res.data.error || "CoreDNS action failed");
+        setLog(JSON.stringify(res.data, null, 2));
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setRunning(null);
+      refreshStatus();
+    }
+  };
+
+  const ELK_MODES = [
+    { mode: "error", label: "ERROR/EXCEPTION", desc: "inject ERROR + EXCEPTION log signals" },
+    { mode: "connection-refused", label: "CONNECTION REFUSED", desc: "inject CONNECTION REFUSED log signals" },
+    { mode: "timeout", label: "TIMEOUT", desc: "inject TIMEOUT/TIMED OUT log signals" },
+  ];
+
+  const runElk = async (op, mode, label) => {
+    if (
+      !confirm(
+        `Run "${label}"?\n\nThis injects an ELK log signal (mode=${mode}) for OpenSRE investigation. Recover with "Clear ELK demo".`
+      )
+    )
+      return;
+
+    setRunning(`elk:${op}:${mode}`);
+    setError(null);
+    setLog("");
+    try {
+      const res =
+        op === "fail"
+          ? await elkDemoApi.fail(mode)
+          : op === "investigate"
+            ? await elkDemoApi.investigate(mode)
+            : await elkDemoApi.recover(mode);
+      if (res.data.success) {
+        const summary = res.data.evidence?.elasticsearch?.summary || res.data.summary;
+        setLog(
+          (res.data.result?.stdout ||
+            res.data.recovery?.kubectl_result?.stdout ||
+            res.data.opensre?.stdout ||
+            JSON.stringify(res.data, null, 2)) +
+            (summary ? `\n\nELK summary: ${JSON.stringify(summary)}` : "")
+        );
+      } else {
+        setError(res.data.error || "ELK action failed");
+        setLog(JSON.stringify(res.data, null, 2));
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setRunning(null);
+      refreshStatus();
+    }
+  };
+
+  const degradedPods = (status?.pods || []).filter((p) => p.status !== "Running");
+
+  const runK8sInvestigate = async () => {
+    const target = k8sPod || degradedPods[0]?.name;
+    if (!target) {
+      setError("No degraded pod to investigate — inject a failure first (e.g. Pod crash).");
+      return;
+    }
+    if (
+      !confirm(
+        `Investigate pod "opensre/${target}"?\n\nCollects pod state, relevant log signals, Kubernetes events, metrics and GitHub correlation, then runs OpenSRE (read-only). This can take a few minutes.`
+      )
+    )
+      return;
+
+    setK8sInvestigating(true);
+    setRunning("k8s:investigate");
+    setError(null);
+    setLog("");
+    try {
+      const res = await api.get(
+        `/opensre/investigate/pod/opensre/${encodeURIComponent(target)}`
+      );
+      if (res.data.success) {
+        setLog(res.data.stdout || "(no output)");
+      } else {
+        setError(res.data.stderr || res.data.error || "Investigation failed");
+        setLog(res.data.stdout || "");
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setK8sInvestigating(false);
       setRunning(null);
       refreshStatus();
     }
@@ -229,6 +432,319 @@ export default function Chaos() {
         </Card>
       </div>
 
+      <div style={{ marginBottom: "var(--space-4)" }}>
+        <Card
+          title="Nginx failure (for OpenSRE investigation)"
+          subtitle="Break the Nginx reverse-proxy on purpose, investigate it, then recover"
+          actions={
+            loading ? (
+              <Loader2 size={14} className="btn__spinner" />
+            ) : nginxState?.state?.failed ? (
+              <span title={nginxState.state.simulated ? "Demo failure recorded without cluster changes (simulated 502 + connection-refused logs are injected at investigate time)" : "Live demo failure: Nginx ConfigMap patched with a broken upstream. Pods stay Running, requests return 502. Recover to restore."}>
+              <Badge tone="danger">
+                <AlertTriangle size={11} /> failed · {nginxState.state.mode}
+                {nginxState.state.simulated ? " · simulated" : " · live"}
+              </Badge>
+              </span>
+            ) : nginxHealth?.status ? (
+              <span title={nginxHealth.status === "healthy" ? "Nginx pod Running, containers ready, nginx -t valid" : nginxHealth.status === "not_deployed" ? "No pods with label app=nginx in namespace opensre — apply infra/k8s/nginx-deployment.yaml + nginx-service.yaml" : "Nginx pods exist but are not all Running/ready, or nginx -t failed — see GET /api/nginx/health for details"}>
+              <Badge tone={nginxHealth.status === "healthy" ? "success" : "neutral"}>
+                {nginxHealth.status === "healthy" ? <CheckCircle2 size={11} /> : <Globe size={11} />} {nginxHealth.status}
+              </Badge>
+              </span>
+            ) : (
+              <Badge tone="neutral"><Globe size={11} /> nginx</Badge>
+            )
+          }
+        >
+          <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", alignItems: "center" }}>
+            <button
+              className="btn btn--primary btn--sm"
+              onClick={() => runNginx("fail", "unavailable", "Nginx 502 (upstream unavailable)")}
+              disabled={running !== null}
+              title="Point Nginx at an unavailable upstream (127.0.0.1:59999) — produces 502 + connection refused"
+            >
+              {running === "nginx:fail:unavailable" ? <Loader2 size={13} className="btn__spinner" /> : <Globe size={14} />}
+              Nginx 502 (upstream unavailable)
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => runNginx("investigate", nginxState?.state?.mode || "unavailable", "Investigate Nginx")}
+              disabled={running !== null}
+              title="Collect Nginx + K8s/metrics/logs + GitHub evidence and run OpenSRE investigation"
+            >
+              {running?.startsWith("nginx:investigate") ? <Loader2 size={13} className="btn__spinner" /> : <Search size={14} />}
+              Investigate Nginx
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => runNginx("recover", nginxState?.state?.mode || "unavailable", "Recover Nginx")}
+              disabled={running !== null}
+              title="Restore the valid Nginx config and clear the demo failure"
+            >
+              {running?.startsWith("nginx:recover") ? <Loader2 size={13} className="btn__spinner" /> : <RotateCcw size={14} />}
+              Recover Nginx
+            </button>
+            {nginxState?.summary && (
+              <span className="text-muted" style={{ fontSize: 12, fontFamily: "var(--font-mono)" }}>
+                5xx {nginxState.summary.http_5xx} · 502 {nginxState.summary.http_502} · 504 {nginxState.summary.http_504}
+              </span>
+            )}
+          </div>
+          <div className="text-muted" style={{ fontSize: 12, marginTop: "var(--space-2)" }}>
+            Tip: fail/recover finish in seconds. Investigate first collects evidence, then waits on the OpenSRE model — allow several minutes; if it spins, check the backend log and retry.
+          </div>
+
+          {!nginxState?.state?.failed && nginxHealth?.status && nginxHealth.status !== "healthy" && (
+            <div className="text-muted" style={{ fontSize: 12, marginTop: "var(--space-2)" }}>
+              {nginxHealth.status === "not_deployed"
+                ? "Nginx Deployment/Service are not applied — run: kubectl apply -f infra/k8s/nginx-configmap.yaml -f infra/k8s/nginx-deployment.yaml -f infra/k8s/nginx-service.yaml"
+                : "Nginx is present but unhealthy — check GET /api/nginx/health (pod phase, readiness, nginx -t) before investigating."}
+            </div>
+          )}
+
+          <details style={{ marginTop: "var(--space-3)" }}>
+            <summary
+              style={{ cursor: "pointer", fontSize: 13, color: "var(--muted)", display: "inline-flex", alignItems: "center", gap: 4 }}
+            >
+              <ChevronDown size={13} /> More Nginx faults
+            </summary>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+                gap: "var(--space-2)",
+                marginTop: "var(--space-2)",
+              }}
+            >
+              {NGINX_MODES.map((m) => (
+                <button
+                  key={m.mode}
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => runNginx("fail", m.mode, `Nginx ${m.label}`)}
+                  disabled={running !== null}
+                  title={m.desc}
+                >
+                  {running === `nginx:fail:${m.mode}` ? <Loader2 size={13} className="btn__spinner" /> : <Globe size={13} style={{ marginRight: 4 }} />}
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </details>
+        </Card>
+      </div>
+
+      <div style={{ marginBottom: "var(--space-4)" }}>
+        <Card
+          title="CoreDNS failure (for OpenSRE investigation)"
+          subtitle="Break cluster DNS on purpose, investigate it, then recover"
+          actions={
+            loading ? (
+              <Loader2 size={14} className="btn__spinner" />
+            ) : corednsState?.state?.failed ? (
+              <span title={corednsState.state.simulated ? "Demo failure recorded without cluster changes (synthetic SERVFAIL/timeout logs are injected at investigate time)" : "Live demo failure in the demo cluster. Recover to restore CoreDNS."}>
+              <Badge tone="danger">
+                <AlertTriangle size={11} /> failed · {corednsState.state.mode}
+                {corednsState.state.simulated ? " · simulated" : " · live"}
+              </Badge>
+              </span>
+            ) : corednsState?.health?.status ? (
+              <span title={corednsState.health.status === "healthy" ? "CoreDNS pods Running and ready" : "CoreDNS pods missing, not Running/ready, or restarts climbing — see GET /api/coredns/health for details"}>
+              <Badge tone={corednsState.health.status === "healthy" ? "success" : corednsState.health.status === "degraded" ? "warning" : corednsState.health.status === "down" ? "danger" : "neutral"}>
+                {corednsState.health.status === "healthy" ? <CheckCircle2 size={11} /> : <Globe size={11} />} {corednsState.health.status}
+              </Badge>
+              </span>
+            ) : (
+              <Badge tone="neutral"><Globe size={11} /> coredns</Badge>
+            )
+          }
+        >
+          <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", alignItems: "center" }}>
+            {COREDNS_MODES.map((m) => (
+              <button
+                key={m.mode}
+                className="btn btn--primary btn--sm"
+                onClick={() => runCoredns("fail", m.mode, `CoreDNS ${m.label}`)}
+                disabled={running !== null}
+                title={m.desc}
+              >
+                {running === `coredns:fail:${m.mode}` ? <Loader2 size={13} className="btn__spinner" /> : <Globe size={13} style={{ marginRight: 4 }} />}
+                {m.label}
+              </button>
+            ))}
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => runCoredns("investigate", corednsState?.state?.mode || "kill", "Investigate CoreDNS")}
+              disabled={running !== null}
+              title="Collect CoreDNS + probe/metrics/affected evidence and run OpenSRE investigation"
+            >
+              {running?.startsWith("coredns:investigate") ? <Loader2 size={13} className="btn__spinner" /> : <Search size={14} />}
+              Investigate CoreDNS
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => runCoredns("recover", corednsState?.state?.mode || "kill", "Recover CoreDNS")}
+              disabled={running !== null}
+              title="Restore CoreDNS replicas / remove latency and clear the demo failure"
+            >
+              {running?.startsWith("coredns:recover") ? <Loader2 size={13} className="btn__spinner" /> : <RotateCcw size={14} />}
+              Recover CoreDNS
+            </button>
+            {corednsState?.probe?.available && (
+              <span className="text-muted" style={{ fontSize: 12, fontFamily: "var(--font-mono)" }}>
+                probe {corednsState.probe.verdict}
+                {corednsState.probe.latency_ms_avg !== null && corednsState.probe.latency_ms_avg !== undefined ? ` · avg ${corednsState.probe.latency_ms_avg} ms` : ""}
+                {` · ${corednsState.probe.succeeded}/${corednsState.probe.attempts} ok`}
+              </span>
+            )}
+            {corednsState?.summary && (
+              <span className="text-muted" style={{ fontSize: 12, fontFamily: "var(--font-mono)" }}>
+                SERVFAIL {corednsState.summary.servfail} · timeouts {corednsState.summary.dns_timeouts} · restarts {corednsState.summary.restart_count_total}
+              </span>
+            )}
+          </div>
+          <div className="text-muted" style={{ fontSize: 12, marginTop: "var(--space-2)" }}>
+            Flow: fail (kill/down/latency) → probe flips to degraded/slow/failing → Investigate → OpenSRE RCA names CoreDNS/DNS → Recover.
+            Tip: investigate first collects evidence, then waits on the OpenSRE model — allow several minutes.
+          </div>
+        </Card>
+      </div>
+
+      {/* ELK Card */}
+      <div style={{ marginBottom: "var(--space-4)" }}>
+        <Card
+          title="ELK log signal demo"
+          subtitle="Inject ERROR/EXCEPTION/CONNECTION REFUSED/TIMEOUT logs → Fluent Bit → Elasticsearch → OpenSRE"
+          actions={
+            elkState?.state?.failed ? (
+              <Badge tone="danger">
+                <AlertTriangle size={11} /> failed · {elkState.state.mode}
+                {elkState.state.simulated ? " · simulated" : " · live"}
+              </Badge>
+            ) : elkState?.elasticsearch_health?.available ? (
+              <Badge tone="success">
+                <CheckCircle2 size={11} /> ES connected · {elkState.error_summary?.ERROR || 0} errors
+              </Badge>
+            ) : (
+              <Badge tone="warning">
+                <AlertTriangle size={11} /> ES unavailable
+              </Badge>
+            )
+          }
+        >
+          <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap", alignItems: "center", marginBottom: "var(--space-2)" }}>
+            <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}>
+              {ELK_MODES.map((m) => (
+                <button
+                  key={m.mode}
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => runElk("fail", m.mode, `Fail ELK ${m.label}`)}
+                  disabled={running !== null || (elkState?.state?.failed && !elkState.state.simulated)}
+                  style={{ fontSize: 12 }}
+                  title={m.desc}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+            {elkState?.state?.failed && (
+              <>
+                <button
+                  className="btn btn--primary btn--sm"
+                  onClick={() => runElk("investigate", elkState.state.mode, `Investigate ELK ${elkState.state.mode}`)}
+                  disabled={running !== null}
+                  style={{ fontSize: 12 }}
+                >
+                  Investigate
+                </button>
+                <button
+                  className="btn btn--success btn--sm"
+                  onClick={() => runElk("recover", elkState.state.mode, `Recover ELK ${elkState.state.mode}`)}
+                  disabled={running !== null}
+                  style={{ fontSize: 12 }}
+                >
+                  Recover
+                </button>
+              </>
+            )}
+          </div>
+          {elkState?.elasticsearch_health?.available && (
+            <span style={{ fontSize: 12 }}>
+              Elasticsearch: <code>{elkState.elasticsearch_health.version}</code> · cluster: <code>{elkState.elasticsearch_health.cluster}</code>
+            </span>
+          )}
+          {elkState?.error_summary && Object.keys(elkState.error_summary).length > 0 && (
+            <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", marginTop: "var(--space-2)" }}>
+              {Object.entries(elkState.error_summary).map(([k, v]) => (
+                <span key={k} className="text-muted" style={{ fontSize: 11, fontFamily: "var(--font-mono)" }}>
+                  {k}: {v}
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="text-muted" style={{ fontSize: 12, marginTop: "var(--space-2)" }}>
+            Flow: fail (error/connection-refused/timeout) → Fluent Bit ships structured logs to ES → Investigate → OpenSRE RCA correlates ELK evidence → Recover.
+          </div>
+        </Card>
+      </div>
+
+      <div style={{ marginBottom: "var(--space-4)" }}>
+        <Card
+          title="Kubernetes failure investigation"
+          subtitle="Pick a degraded pod, collect log + event evidence, run OpenSRE"
+          actions={
+            degradedPods.length > 0 ? (
+              <Badge tone="danger">
+                <AlertTriangle size={11} /> {degradedPods.length} degraded
+              </Badge>
+            ) : (
+              <Badge tone="success">
+                <CheckCircle2 size={11} /> all Running
+              </Badge>
+            )
+          }
+        >
+          <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", alignItems: "center" }}>
+            <select
+              className="btn btn--ghost btn--sm"
+              value={k8sPod || degradedPods[0]?.name || ""}
+              onChange={(e) => setK8sPod(e.target.value)}
+              disabled={running !== null || degradedPods.length === 0}
+              style={{ minWidth: 260 }}
+              title="Non-Running pods in namespace opensre"
+            >
+              {degradedPods.length === 0 && <option value="">No degraded pods</option>}
+              {degradedPods.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name} · {p.status} · restarts {p.restarts}
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn btn--primary btn--sm"
+              onClick={runK8sInvestigate}
+              disabled={running !== null || degradedPods.length === 0}
+              title="Collect pod state, relevant log signals, events, metrics and run OpenSRE (read-only)"
+            >
+              {k8sInvestigating ? <Loader2 size={13} className="btn__spinner" /> : <Search size={14} />}
+              {k8sInvestigating ? "Investigating…" : "Investigate pod"}
+            </button>
+            {(k8sPod || degradedPods[0]?.name) && (
+              <Link
+                className="btn btn--ghost btn--sm"
+                to={`/incident?namespace=opensre&pod=${encodeURIComponent(k8sPod || degradedPods[0].name)}`}
+              >
+                Open in Incident report
+              </Link>
+            )}
+          </div>
+          <div className="text-muted" style={{ fontSize: 12, marginTop: "var(--space-2)" }}>
+            Flow: inject “Pod crash” above → pod restarts climb → pick it here → Investigate.
+            Evidence covers container restarts, relevant ERROR/exception/timeout log lines, BackOff/Unhealthy events and metrics.
+          </div>
+        </Card>
+      </div>
+
       <div className="grid-2" style={{ marginBottom: "var(--space-4)" }}>
         <Card
           title="Failure injection"
@@ -274,6 +790,81 @@ export default function Chaos() {
                 {running === "seed:null" ? <Loader2 size={14} className="btn__spinner" /> : <Database size={14} />}
                 Seed database data (Yugabyte + Aerospike)
               </button>
+            </div>
+
+            <div style={{ marginTop: "var(--space-3)", paddingTop: "var(--space-3)", borderTop: "1px solid var(--border)" }}>
+              <div className="text-muted" style={{ fontSize: 13, marginBottom: "var(--space-2)" }}>
+                <AlertCircle size={13} style={{ verticalAlign: "middle", marginRight: 4 }} />
+                Data Integrity Testing — inject bad data for investigation
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+                  gap: "var(--space-2)",
+                }}
+              >
+                <button
+                  key="insert-empty"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => runAction("inject", "insert-empty-yugabyte", "Insert empty fields (Yugabyte)")}
+                  disabled={running !== null}
+                  title="Insert NULL/empty required fields into YugabyteDB"
+                >
+                  <HardDrive size={13} style={{ marginRight: 4 }} />
+                  Empty fields (Yugabyte)
+                </button>
+                <button
+                  key="insert-empty-aero"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => runAction("inject", "insert-empty-aerospike", "Insert empty fields (Aerospike)")}
+                  disabled={running !== null}
+                  title="Insert missing required fields into Aerospike"
+                >
+                  <Database size={13} style={{ marginRight: 4 }} />
+                  Empty fields (Aerospike)
+                </button>
+                <button
+                  key="insert-duplicates"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => runAction("inject", "insert-duplicates-yugabyte", "Insert duplicates (Yugabyte)")}
+                  disabled={running !== null}
+                  title="Insert duplicate emails and PKs into YugabyteDB"
+                >
+                  <HardDrive size={13} style={{ marginRight: 4 }} />
+                  Duplicates (Yugabyte)
+                </button>
+                <button
+                  key="insert-duplicates-aero"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => runAction("inject", "insert-duplicates-aerospike", "Insert duplicates (Aerospike)")}
+                  disabled={running !== null}
+                  title="Insert duplicate logical records into Aerospike"
+                >
+                  <Database size={13} style={{ marginRight: 4 }} />
+                  Duplicates (Aerospike)
+                </button>
+                <button
+                  key="insert-invalid"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => runAction("inject", "insert-invalid-yugabyte", "Insert invalid values (Yugabyte)")}
+                  disabled={running !== null}
+                  title="Insert negative counts, invalid emails into YugabyteDB"
+                >
+                  <HardDrive size={13} style={{ marginRight: 4 }} />
+                  Invalid values (Yugabyte)
+                </button>
+                <button
+                  key="insert-invalid-aero"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => runAction("inject", "insert-invalid-aerospike", "Insert invalid values (Aerospike)")}
+                  disabled={running !== null}
+                  title="Insert negative counts, invalid data into Aerospike"
+                >
+                  <Database size={13} style={{ marginRight: 4 }} />
+                  Invalid values (Aerospike)
+                </button>
+              </div>
             </div>
           </div>
         </Card>
