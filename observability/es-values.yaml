@@ -1,0 +1,127 @@
+# Elasticsearch Helm values for demo/development deployment
+# Single node with all roles (master+data+ingest) — demo mode
+
+clusterName: "opensre-es"
+nodeGroup: "master"
+
+# Single node with all roles
+replicas: 1
+minimumMasterNodes: 1
+
+# All roles on one node
+roles:
+  - master
+  - data
+  - data_content
+  - data_hot
+  - ingest
+
+# --- Security ---
+createCert: false
+
+# --- Elasticsearch config (elasticsearch.yml) ---
+esConfig:
+  elasticsearch.yml: |
+    cluster.name: "opensre-es"
+    node.name: "${HOSTNAME}"
+    node.roles: [master, data, data_content, data_hot, ingest]
+    path.data: /usr/share/elasticsearch/data
+    path.logs: /usr/share/elasticsearch/logs
+    network.host: 0.0.0.0
+    discovery.seed_hosts: []
+    cluster.initial_master_nodes: ["opensre-es-master-0"]
+    xpack.security.enabled: false
+    xpack.security.transport.ssl.enabled: false
+    xpack.security.http.ssl.enabled: false
+
+# --- JVM options ---
+esJavaOpts: "-Xmx1g -Xms1g"
+
+# --- Resources ---
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1536Mi"
+  limits:
+    cpu: "1000m"
+    memory: "2Gi"
+
+initResources: {}
+
+# --- Readiness probe: simple HTTP check (no auth) ---
+readinessProbe:
+  exec:
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        export NSS_SDB_USE_CACHE=no
+        # Wait for green status via HTTP (no auth)
+        curl -sf -o /dev/null "http://127.0.0.1:9200/_cluster/health?wait_for_status=green&timeout=1s" && exit 0 || exit 1
+  initialDelaySeconds: 15
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30
+
+# --- Anti-affinity: soft for demo (allow scheduling on same node) ---
+antiAffinity: "soft"
+
+# --- Volume ---
+volumeClaimTemplate:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: "standard"
+  resources:
+    requests:
+      storage: 10Gi
+
+# --- Service ---
+service:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 9200
+      targetPort: 9200
+    - name: transport
+      port: 9300
+      targetPort: 9300
+
+# --- Extra services (NodePort via Kind) ---
+extraServices:
+  - name: "opensre-es-http-external"
+    type: NodePort
+    ports:
+      - name: http
+        port: 9200
+        targetPort: 9200
+        nodePort: 30920
+    selector:
+      app: opensre-es
+      role: master
+
+# --- Pod Disruption Budget ---
+podDisruptionBudget:
+  enabled: false
+
+# --- Sysctl init container ---
+sysctlInit:
+  enabled: true
+
+# --- Node selector ---
+nodeSelector: {}
+
+# --- Tolerations ---
+tolerations: []
+
+# --- Update strategy ---
+updateStrategy: RollingUpdate
+
+# --- Persistence ---
+persistence:
+  enabled: true
+
+# --- Labels ---
+labels: {}
+
+# --- Annotations ---
+podAnnotations: {}

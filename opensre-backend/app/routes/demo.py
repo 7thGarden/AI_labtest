@@ -1,6 +1,7 @@
 import json
 import tempfile
 import os
+import time
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -592,4 +593,472 @@ def unhealthy_pod_status():
         "restarts": restart_count,
         "last_reason": last_reason,
         "node": pod.get("spec", {}).get("nodeName"),
+    }
+
+
+# ==================================================================
+# DATABASE INVESTIGATION DEMO WORKFLOWS
+# ==================================================================
+
+class DBScenarioRequest(BaseModel):
+    target: str  # "yugabyte" or "aerospike"
+
+
+# ------------------------------------------------------------------
+# SCENARIO 1: Database Unavailable / Connection Refused
+# ------------------------------------------------------------------
+@router.post("/db-scenario/unavailable/fail")
+def db_unavailable_fail(request: DBScenarioRequest):
+    """Step 1: Stop the database container to simulate unavailability."""
+    target = request.target.lower()
+    container = _target_to_container(target)
+
+    if target not in ("yugabyte", "aerospike"):
+        raise HTTPException(status_code=400, detail=f"Unknown target '{target}'")
+
+    # Seed data first
+    seed = _seed_yugabyte() if target == "yugabyte" else _seed_aerospike()
+    # Stop container
+    stop = _stop_container(container)
+
+    return {
+        "success": stop.get("success", False),
+        "scenario": "database-unavailable",
+        "target": target,
+        "container": container,
+        "seed": seed,
+        "fault": {
+            "action": f"{target}-down",
+            "injected": stop.get("success", False),
+            "container_stopped": container,
+            "description": f"{target.capitalize()} container stopped - simulating connection refused/unavailable"
+        },
+    }
+
+
+@router.post("/db-scenario/unavailable/investigate")
+def db_unavailable_investigate(request: DBScenarioRequest):
+    """Step 2: Collect evidence and run OpenSRE investigation while DB is down."""
+    target = request.target.lower()
+
+    if target not in ("yugabyte", "aerospike"):
+        raise HTTPException(status_code=400, detail=f"Unknown target '{target}'")
+
+    evidence_result = investigation.collect_database_evidence(target)
+
+    if not evidence_result.get("success"):
+        return {
+            "success": False,
+            "error": evidence_result.get("error", "Evidence collection failed"),
+        }
+
+    evidence = evidence_result["evidence"]
+    evidence["question"] = (
+        f"The {target.capitalize()} database appears to be unavailable. "
+        f"Applications are reporting connection refused errors. "
+        f"Investigate the database state and determine the root cause. "
+        f"Provide: root cause, confidence, evidence, timeline, affected component, "
+        f"and recommended remediation."
+    )
+
+    opensre_result = opensre_cli.investigate(evidence)
+
+    return {
+        "success": opensre_result.get("returncode") == 0,
+        "scenario": "database-unavailable",
+        "target": target,
+        "evidence": evidence,
+        "opensre": opensre_result,
+    }
+
+
+@router.post("/db-scenario/unavailable/recover")
+def db_unavailable_recover(request: DBScenarioRequest):
+    """Step 3: Restart the database container to recover."""
+    target = request.target.lower()
+    container = _target_to_container(target)
+
+    if target not in ("yugabyte", "aerospike"):
+        raise HTTPException(status_code=400, detail=f"Unknown target '{target}'")
+
+    start = _start_container(container)
+    # Wait a bit for DB to be ready
+    import time
+    time.sleep(3)
+    health = investigation.collect_database_evidence(target)
+
+    return {
+        "success": start.get("success", False),
+        "scenario": "database-unavailable",
+        "target": target,
+        "container": container,
+        "recovery": {
+            "action": f"{target}-up",
+            "success": start.get("success", False),
+            "container_restarted": container,
+        },
+        "health": health.get("evidence", {}),
+    }
+
+
+# ------------------------------------------------------------------
+# SCENARIO 2: Database/Query Latency Problem
+# ------------------------------------------------------------------
+@router.post("/db-scenario/latency/induce")
+def db_latency_induce(request: DBScenarioRequest):
+    """Step 1: Induce latency by running heavy queries/operations."""
+    target = request.target.lower()
+
+    if target not in ("yugabyte", "aerospike"):
+        raise HTTPException(status_code=400, detail=f"Unknown target '{target}'")
+
+    if target == "yugabyte":
+        # Create a large table and run heavy queries to induce latency
+        yugabyte.execute("""
+            CREATE TABLE IF NOT EXISTS latency_test (
+                id BIGSERIAL PRIMARY KEY,
+                data TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        # Insert many rows
+        for i in range(100):
+            yugabyte.execute(
+                "INSERT INTO latency_test (data) VALUES (%s)",
+                (f"test-data-{'x' * 1000}",)
+            )
+        # Run a slow query (no index on data column)
+        result = yugabyte.query("""
+            SELECT * FROM latency_test 
+            WHERE data LIKE '%test%' 
+            ORDER BY created_at DESC 
+            LIMIT 100
+        """)
+        return {
+            "success": True,
+            "scenario": "database-latency",
+            "target": target,
+            "action": "induced-latency",
+            "details": "Created large table with unindexed column, ran heavy queries",
+            "query_result": result,
+        }
+    else:
+        # Aerospike: write many large records
+        for i in range(200):
+            aerospike.write("test", "latency", f"key-{i}", {
+                "data": "x" * 5000,
+                "index": i,
+                "timestamp": time.time(),
+            })
+        # Scan to induce load
+        result = aerospike.scan("test", "latency")
+        return {
+            "success": True,
+            "scenario": "database-latency",
+            "target": target,
+            "action": "induced-latency",
+            "details": "Wrote 200 large records (5KB each), scanned set",
+            "scan_result": result,
+        }
+
+
+@router.post("/db-scenario/latency/investigate")
+def db_latency_investigate(request: DBScenarioRequest):
+    """Step 2: Collect evidence and run OpenSRE investigation for latency."""
+    target = request.target.lower()
+
+    if target not in ("yugabyte", "aerospike"):
+        raise HTTPException(status_code=400, detail=f"Unknown target '{target}'")
+
+    evidence_result = investigation.collect_database_evidence(target)
+
+    if not evidence_result.get("success"):
+        return {
+            "success": False,
+            "error": evidence_result.get("error", "Evidence collection failed"),
+        }
+
+    evidence = evidence_result["evidence"]
+    evidence["question"] = (
+        f"The {target.capitalize()} database is experiencing high query latency. "
+        f"Applications are timing out or responding slowly. "
+        f"Investigate the database for slow queries, resource contention, "
+        f"lock waits, or other latency causes. "
+        f"Provide: root cause, confidence, evidence, timeline, affected component, "
+        f"and recommended remediation."
+    )
+
+    opensre_result = opensre_cli.investigate(evidence)
+
+    return {
+        "success": opensre_result.get("returncode") == 0,
+        "scenario": "database-latency",
+        "target": target,
+        "evidence": evidence,
+        "opensre": opensre_result,
+    }
+
+
+@router.post("/db-scenario/latency/recover")
+def db_latency_recover(request: DBScenarioRequest):
+    """Step 3: Clean up latency-inducing data."""
+    target = request.target.lower()
+
+    if target not in ("yugabyte", "aerospike"):
+        raise HTTPException(status_code=400, detail=f"Unknown target '{target}'")
+
+    if target == "yugabyte":
+        yugabyte.execute("DROP TABLE IF EXISTS latency_test")
+    else:
+        # Delete latency test records
+        for i in range(200):
+            aerospike.delete("test", "latency", f"key-{i}")
+
+    health = investigation.collect_database_evidence(target)
+
+    return {
+        "success": True,
+        "scenario": "database-latency",
+        "target": target,
+        "recovery": {
+            "action": "cleanup-latency-data",
+            "success": True,
+        },
+        "health": health.get("evidence", {}),
+    }
+
+
+# ------------------------------------------------------------------
+# SCENARIO 3: Data Quality / Data Integrity Problem
+# ------------------------------------------------------------------
+@router.post("/db-scenario/data-integrity/corrupt")
+def db_data_integrity_corrupt(request: DBScenarioRequest):
+    """Step 1: Introduce data integrity issues (duplicates, NULLs, invalid values)."""
+    target = request.target.lower()
+
+    if target not in ("yugabyte", "aerospike"):
+        raise HTTPException(status_code=400, detail=f"Unknown target '{target}'")
+
+    if target == "yugabyte":
+        # Create test table and insert problematic data
+        yugabyte.execute_raw("""
+            CREATE TABLE IF NOT EXISTS integrity_test (
+                id INT PRIMARY KEY,
+                name TEXT,
+                email TEXT UNIQUE,
+                status TEXT DEFAULT 'active',
+                count INT CHECK (count >= 0)
+            )
+        """)
+        # Insert good data
+        yugabyte.execute_raw("INSERT INTO integrity_test (id, name, email, status, count) VALUES (1, 'Good User', 'good@test.com', 'active', 10)")
+        # Insert duplicate email (violates UNIQUE)
+        yugabyte.execute_raw("INSERT INTO integrity_test (id, name, email, status, count) VALUES (2, 'Dup User', 'good@test.com', 'active', 5)")
+        # Insert NULL name
+        yugabyte.execute_raw("INSERT INTO integrity_test (id, name, email, status, count) VALUES (3, NULL, 'null@test.com', 'active', 3)")
+        # Insert empty string name
+        yugabyte.execute_raw("INSERT INTO integrity_test (id, name, email, status, count) VALUES (4, '', 'empty@test.com', 'active', 4)")
+        # Insert negative count (violates CHECK)
+        yugabyte.execute_raw("INSERT INTO integrity_test (id, name, email, status, count) VALUES (5, 'Bad Count', 'bad@test.com', 'active', -5)")
+        # Insert duplicate primary key
+        yugabyte.execute_raw("INSERT INTO integrity_test (id, name, email, status, count) VALUES (1, 'Dup PK', 'dup@test.com', 'inactive', 1)")
+    else:
+        # Aerospike: write records with missing required fields, duplicates
+        aerospike.write("test", "integrity", "good-1", {"name": "Good User", "status": "active", "_key": "good-1"})
+        aerospike.write("test", "integrity", "dup-key", {"name": "Dup User", "status": "active", "_key": "dup-key"})
+        aerospike.write("test", "integrity", "dup-key", {"name": "Another Dup", "status": "inactive", "_key": "dup-key"})  # Overwrite
+        aerospike.write("test", "integrity", "missing-name", {"status": "active", "_key": "missing-name"})  # Missing required 'name'
+        aerospike.write("test", "integrity", "invalid-count", {"name": "Bad Count", "status": "active", "count": -10, "_key": "invalid-count"})
+
+    return {
+        "success": True,
+        "scenario": "data-integrity",
+        "target": target,
+        "action": "corrupted-data",
+        "details": "Introduced: duplicate keys, NULL required fields, constraint violations, invalid values",
+    }
+
+
+# ------------------------------------------------------------------
+# NEW: Data injection endpoints for testing
+# ------------------------------------------------------------------
+@router.post("/db-scenario/data-integrity/insert-empty")
+def db_data_integrity_insert_empty(request: DBScenarioRequest):
+    """Insert empty/missing required field data for testing."""
+    target = request.target.lower()
+
+    if target not in ("yugabyte", "aerospike"):
+        raise HTTPException(status_code=400, detail=f"Unknown target '{target}'")
+
+    if target == "yugabyte":
+        yugabyte.execute_raw("""
+            CREATE TABLE IF NOT EXISTS integrity_test (
+                id INT PRIMARY KEY,
+                name TEXT,
+                email TEXT UNIQUE,
+                status TEXT DEFAULT 'active',
+                count INT CHECK (count >= 0)
+            )
+        """)
+        for i in range(10, 15):
+            yugabyte.execute_raw(
+                "INSERT INTO integrity_test (id, name, email, status, count) VALUES (%s, NULL, %s, 'active', %s)",
+                (i, f"empty-name-{i}@test.com", i)
+            )
+        for i in range(20, 25):
+            yugabyte.execute_raw(
+                "INSERT INTO integrity_test (id, name, email, status, count) VALUES (%s, '', %s, 'active', %s)",
+                (i, f"empty-string-{i}@test.com", i)
+            )
+    else:
+        for i in range(100, 105):
+            aerospike.write("test", "integrity", f"empty-name-{i}", {
+                "status": "active", "count": i, "_key": f"empty-name-{i}"
+            })
+        for i in range(110, 115):
+            aerospike.write("test", "integrity", f"empty-string-{i}", {
+                "name": "", "status": "active", "count": i, "_key": f"empty-string-{i}"
+            })
+        for i in range(120, 125):
+            aerospike.write("test", "integrity", f"missing-status-{i}", {
+                "name": f"User {i}", "count": i, "_key": f"missing-status-{i}"
+            })
+
+    return {
+        "success": True,
+        "scenario": "data-integrity",
+        "target": target,
+        "action": "insert-empty-fields",
+        "details": "Inserted records with NULL/empty required fields (name, status)",
+    }
+
+
+@router.post("/db-scenario/data-integrity/insert-duplicates")
+def db_data_integrity_insert_duplicates(request: DBScenarioRequest):
+    """Insert duplicate data for testing."""
+    target = request.target.lower()
+
+    if target not in ("yugabyte", "aerospike"):
+        raise HTTPException(status_code=400, detail=f"Unknown target '{target}'")
+
+    if target == "yugabyte":
+        yugabyte.execute_raw("""
+            CREATE TABLE IF NOT EXISTS integrity_test (
+                id INT PRIMARY KEY,
+                name TEXT,
+                email TEXT UNIQUE,
+                status TEXT DEFAULT 'active',
+                count INT CHECK (count >= 0)
+            )
+        """)
+        for i in range(30, 35):
+            yugabyte.execute_raw(
+                "INSERT INTO integrity_test (id, name, email, status, count) VALUES (%s, %s, 'duplicate@test.com', 'active', %s)",
+                (i, f"Dup User {i}", i)
+            )
+        for i in range(40, 45):
+            yugabyte.execute_raw(
+                "INSERT INTO integrity_test (id, name, email, status, count) VALUES (1, %s, %s, 'active', %s)",
+                (f"Dup PK {i}", f"dup-pk-{i}@test.com", i)
+            )
+    else:
+        for i in range(200, 205):
+            aerospike.write("test", "integrity", f"dup-email-{i}", {
+                "name": f"Dup User {i}", "email": "duplicate@test.com",
+                "status": "active", "count": i, "_key": f"dup-email-{i}"
+            })
+        for i in range(210, 215):
+            aerospike.write("test", "integrity", "dup-key", {
+                "name": f"Overwrite {i}", "status": "active",
+                "count": i, "_key": "dup-key"
+            })
+
+    return {
+        "success": True,
+        "scenario": "data-integrity",
+        "target": target,
+        "action": "insert-duplicates",
+        "details": "Inserted duplicate emails, duplicate primary keys, and key overwrites",
+    }
+
+
+@router.post("/db-scenario/data-integrity/insert-invalid")
+def db_data_integrity_insert_invalid(request: DBScenarioRequest):
+    """Insert invalid data (negative values, wrong types) for testing."""
+    target = request.target.lower()
+
+    if target not in ("yugabyte", "aerospike"):
+        raise HTTPException(status_code=400, detail=f"Unknown target '{target}'")
+
+    if target == "yugabyte":
+        yugabyte.execute_raw("""
+            CREATE TABLE IF NOT EXISTS integrity_test (
+                id INT PRIMARY KEY,
+                name TEXT,
+                email TEXT UNIQUE,
+                status TEXT DEFAULT 'active',
+                count INT CHECK (count >= 0)
+            )
+        """)
+        for i in range(50, 55):
+            yugabyte.execute_raw(
+                "INSERT INTO integrity_test (id, name, email, status, count) VALUES (%s, %s, %s, 'active', %s)",
+                (i, f"Bad Count {i}", f"bad-{i}@test.com", -i)
+            )
+        for i in range(60, 65):
+            yugabyte.execute_raw(
+                "INSERT INTO integrity_test (id, name, email, status, count) VALUES (%s, %s, %s, 'active', %s)",
+                (i, f"Bad Email {i}", f"not-an-email-{i}", i)
+            )
+    else:
+        for i in range(300, 305):
+            aerospike.write("test", "integrity", f"invalid-count-{i}", {
+                "name": f"Bad Count {i}", "status": "active",
+                "count": -i, "_key": f"invalid-count-{i}"
+            })
+        for i in range(310, 315):
+            aerospike.write("test", "integrity", f"invalid-email-{i}", {
+                "name": f"Bad Email {i}", "email": f"not-an-email-{i}",
+                "status": "active", "count": i, "_key": f"invalid-email-{i}"
+            })
+
+    return {
+        "success": True,
+        "scenario": "data-integrity",
+        "target": target,
+        "action": "insert-invalid-values",
+        "details": "Inserted negative counts, invalid emails, and other invalid values",
+    }
+
+
+# ------------------------------------------------------------------
+# Combined scenario: Run all three scenarios for a target
+# ------------------------------------------------------------------
+@router.get("/db-scenario/list")
+def list_db_scenarios():
+    """List available database investigation demo scenarios."""
+    return {
+        "scenarios": [
+            {
+                "id": "unavailable",
+                "name": "Database Unavailable / Connection Refused",
+                "description": "Simulate database container stop, investigate connection failures, then recover",
+                "steps": ["fail", "investigate", "recover"],
+                "targets": ["yugabyte", "aerospike"],
+            },
+            {
+                "id": "latency",
+                "name": "Database/Query Latency Problem",
+                "description": "Induce high latency via heavy queries, investigate slow queries, then clean up",
+                "steps": ["induce", "investigate", "recover"],
+                "targets": ["yugabyte", "aerospike"],
+            },
+            {
+                "id": "data-integrity",
+                "name": "Data Quality / Data Integrity Problem",
+                "description": "Introduce duplicates, NULLs, constraint violations, investigate, then clean up",
+                "steps": ["corrupt", "investigate", "recover"],
+                "targets": ["yugabyte", "aerospike"],
+            },
+        ]
     }

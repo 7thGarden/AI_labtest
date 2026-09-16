@@ -77,3 +77,20 @@ config:
       bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
       tls_config:
         insecure_skip_verify: true
+
+    # NEW: Elasticsearch monitoring
+    - job_name: elasticsearch
+      kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            names: [observability]
+
+      relabel_configs:
+        - source_labels: [__meta_kubernetes_service_name]
+          action: keep
+          regex: opensre-es-master
+        - source_labels: [__meta_kubernetes_endpoint_port_name]
+          action: keep
+          regex: http
+        - source_labels: [__address__]
+          target_label: instance

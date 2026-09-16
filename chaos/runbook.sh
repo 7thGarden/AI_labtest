@@ -21,6 +21,12 @@
 #    pod-latency             Add +5s extra latency to ALL catalog-api traffic
 #    flaky-latency           Add latency to flaky-service /orders + /slow traffic
 #    system-pod-kill         Kill a kube-system pod (e.g. coredns) -> self-healing
+#    coredns-kill              Delete one CoreDNS pod (self-heal, restart evidence)
+#    coredns-down              Scale CoreDNS deployment to 0 (sustained DNS outage)
+#    coredns-latency           Add netem delay to worker egress (DNS probe slows)
+#    elk-error                 Inject ERROR/EXCEPTION log signal into catalog-api
+#    elk-connection-refused    Inject CONNECTION REFUSED log signal into catalog-api
+#    elk-timeout               Inject TIMEOUT log signal into catalog-api
 #    node-cordon             Cordon the worker node (no new pods scheduled)
 #    node-drain              Drain the worker node (evicts pods)
 #    node-network-latency    Add netem latency to the whole worker node egress
@@ -32,6 +38,9 @@
 #    ./chaos/runbook.sh recover latency-off         Clear the injected catalog-api latency
 #    ./chaos/runbook.sh recover flaky-latency-off   Clear the injected flaky-service latency
 #    ./chaos/runbook.sh recover network-latency-off Remove the worker-node netem delay
+#    ./chaos/runbook.sh recover coredns-up           Restore CoreDNS replicas
+#    ./chaos/runbook.sh recover coredns-latency-off  Remove the DNS-demo netem delay
+#    ./chaos/runbook.sh recover elk-recover          Clear ELK demo failure signal
 #    ./chaos/runbook.sh recover uncordon            Uncordon the worker node
 #    ./chaos/runbook.sh recover all                 Restore everything
 #
@@ -50,6 +59,11 @@ CATALOG_NS="opensre"
 WORKER_NODE="${WORKER_NODE:-opensre-demo-worker}"
 NODE_CONTAINER="${NODE_CONTAINER:-opensre-demo-worker}"
 NODE_LATENCY_MS="${NODE_LATENCY_MS:-500}"
+COREDNS_NS="${COREDNS_NS:-kube-system}"
+COREDNS_DEPLOY="${COREDNS_DEPLOY:-coredns}"
+COREDNS_LABEL="${COREDNS_LABEL:-k8s-app=kube-dns}"
+COREDNS_LATENCY_MS="${COREDNS_LATENCY_MS:-300}"
+COREDNS_REPLICAS_DEFAULT="${COREDNS_REPLICAS_DEFAULT:-2}"
 SYSTEM_POD_PATTERN="${SYSTEM_POD_PATTERN:-coredns}"
 
 RUNBOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -72,7 +86,7 @@ fail()   { printf "${RED}  ✗ %s${RESET}\n" "$*"; }
 note()   { printf "${DIM}    %s${RESET}\n" "$*"; }
 
 usage() {
-  sed -n '3,33p' "$0"
+  sed -n '3,38p' "$0"
   exit 1
 }
 
@@ -174,8 +188,7 @@ json.dump(data, open(path, "w"), indent=2)
   } 9>"${EXPERIMENTS_DIR}/.lock"
 }
 
-exp_active_show() {
-  if [[ -f "${EXPERIMENTS_DIR}/active.json" ]] \
+exp_active_show() {  if [[ -f "${EXPERIMENTS_DIR}/active.json" ]] \
     && python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if d else 1)' \
       "${EXPERIMENTS_DIR}/active.json" 2>/dev/null; then
     echo "--- Active faults (chaos/experiments/active.json) ---"
@@ -187,6 +200,38 @@ for fault, info in sorted(data.items()):
 ' "${EXPERIMENTS_DIR}/active.json"
     echo
   fi
+}
+
+# ---------- Elasticsearch helper for chaos ----------------------------------
+# Write a log entry directly to Elasticsearch for testing/verification
+es_write_log() {
+  local level="$1" message="$2" fault="$3" exp_id="$4"
+  local ts
+  ts="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+  local payload
+  payload=$(python3 -c '
+import json, sys
+level, msg, fault, exp_id, ts = sys.argv[1:6]
+print(json.dumps({
+    "@timestamp": ts,
+    "level": level,
+    "log": msg,
+    "chaos_fault": fault,
+    "chaos_experiment_id": exp_id,
+    "k8s_namespace": "opensre",
+    "k8s_pod_name": "chaos-injector",
+    "k8s_container_name": "chaos-runbook",
+    "k8s_labels_app": "chaos-runbook"
+}))
+' "$level" "$message" "$fault" "$exp_id" "$ts")
+  curl -s -X POST "http://localhost:9200/logs-opensre/_doc" \
+    -H "Content-Type: application/json" \
+    -d "$payload" >/dev/null 2>&1 || true
+}
+
+# Verify ES connectivity
+es_check() {
+  curl -s -f "http://localhost:9200/_cluster/health" >/dev/null 2>&1
 }
 
 # ---------- Failure: Aerospike down ----------------------------------------
@@ -443,6 +488,193 @@ system_pod_kill() {
   echo "      self-healing — watch the pod come back in kubectl get pods -A."
 }
 
+# ---------- Failure: CoreDNS pod kill (self-healing, restart evidence) -----
+coredns_kill() {
+  banner "Injecting failure: COREDNS POD KILL"
+  step "Deleting one CoreDNS pod in '${COREDNS_NS}' (deployment recreates it)"
+  local pod
+  pod=$(kubectl --context "${CLUSTER}" get pod -n "${COREDNS_NS}" -l "${COREDNS_LABEL}" \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [[ -z "${pod}" ]]; then
+    warn "No CoreDNS pod found (label ${COREDNS_LABEL} in ${COREDNS_NS})"
+    return
+  fi
+  kubectl --context "${CLUSTER}" delete pod "${pod}" -n "${COREDNS_NS}" --wait=false
+  ok "Deleted CoreDNS pod '${pod}'"
+  exp_record inject coredns-kill "${pod}" "" "coredns pod deleted, deployment recreates"
+  echo
+  echo "  >>> Watch 'kubectl get pods -n kube-system -l ${COREDNS_LABEL}': a new"
+  echo "      pod starts and RESTARTS/age reset. Brief DNS blip possible."
+  echo
+  echo "  >>> No recovery needed (self-heals); 'recover coredns-up' verifies health."
+}
+
+# ---------- Failure: CoreDNS down (sustained DNS outage, demo only) --------
+coredns_down() {
+  banner "Injecting failure: COREDNS DOWN (demo cluster only)"
+  local replicas
+  replicas=$(kubectl --context "${CLUSTER}" get deploy "${COREDNS_DEPLOY}" -n "${COREDNS_NS}" \
+    -o jsonpath='{.spec.replicas}' 2>/dev/null || true)
+  [[ "${replicas}" =~ ^[0-9]+$ ]] || replicas="${COREDNS_REPLICAS_DEFAULT}"
+  step "Scaling deployment/${COREDNS_DEPLOY} ${replicas} -> 0 (saving replicas=${replicas})"
+  kubectl --context "${CLUSTER}" scale deploy "${COREDNS_DEPLOY}" -n "${COREDNS_NS}" --replicas=0
+  ok "CoreDNS scaled to 0 — in-cluster DNS resolution now fails"
+  local id
+  id="$(exp_record inject coredns-down "${COREDNS_DEPLOY}" "replicas=${replicas}->0" "sustained DNS outage")"
+  exp_active_add coredns-down "${id}" "replicas=${replicas}->0"
+  echo
+  echo "  >>> DNS lookups (kube-dns 10.96.0.10) now time out: the CoreDNS page"
+  echo "      probe flips to 'failing' and pod logs/events show the outage."
+  echo
+  echo "  >>> Recover with './chaos/runbook.sh recover coredns-up'"
+}
+
+# ---------- Failure: CoreDNS-visible latency (worker netem) -----------------
+coredns_latency() {
+  banner "Injecting failure: DNS LATENCY (${NODE_CONTAINER})"
+  if exp_active_has node-network-latency; then
+    warn "node-network-latency already active — both share the worker qdisc;"
+    note "recover it first for a clean DNS-latency signal, or continue anyway"
+  fi
+  step "Adding ${COREDNS_LATENCY_MS}ms netem delay to '${NODE_CONTAINER}' eth0"
+  docker exec "${NODE_CONTAINER}" tc qdisc replace dev eth0 root netem delay "${COREDNS_LATENCY_MS}ms"
+  ok "netem delay ${COREDNS_LATENCY_MS}ms applied — DNS probe latency climbs"
+  local id
+  id="$(exp_record inject coredns-latency "${NODE_CONTAINER}" "ms=${COREDNS_LATENCY_MS}" "tc netem for DNS-latency demo")"
+  exp_active_add coredns-latency "${id}" "ms=${COREDNS_LATENCY_MS}"
+  echo
+  echo "  >>> The CoreDNS resolution probe (avg ms) climbs while the fault is"
+  echo "      active; CoreDNS pods themselves stay Running (latency, not outage)."
+  echo
+  echo "  >>> Recover with './chaos/runbook.sh recover coredns-latency-off'"
+}
+
+coredns_latency_off() {
+  banner "Recovery: REMOVE DNS-LATENCY NETEM DELAY (${NODE_CONTAINER})"
+  if exp_active_has node-network-latency; then
+    warn "node-network-latency is still marked active — removing the shared"
+    warn "qdisc anyway; re-apply that fault if you still need it"
+  fi
+  if docker exec "${NODE_CONTAINER}" tc qdisc del dev eth0 root 2>/dev/null; then
+    ok "netem delay removed"
+  else
+    warn "No netem qdisc present on ${NODE_CONTAINER}"
+  fi
+}
+
+# ---------- Failure: ELK log signal injection --------------------------------
+elk_error() {
+  banner "Injecting failure: ELK ERROR LOG SIGNAL"
+  step "Triggering /failure/error on catalog-api to generate ERROR/EXCEPTION logs"
+  local pod
+  pod=$(kubectl --context "${CLUSTER}" get pod -n "${CATALOG_NS}" -l app=catalog-api \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [[ -z "${pod}" ]]; then
+    warn "No catalog-api pod found — cannot inject ELK error signal"
+    return
+  fi
+  kubectl --context "${CLUSTER}" exec -n "${CATALOG_NS}" "${pod}" -- \
+    python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/failure/error', timeout=10)" \
+    >/dev/null 2>&1 || true
+  ok "ERROR/EXCEPTION log signal injected — Fluent Bit forwards to Elasticsearch"
+
+  # Also write directly to ES with experiment ID for traceability
+  local id
+  id="$(exp_record inject elk-error "${pod}" "" "ERROR/EXCEPTION log signal")"
+  if es_check; then
+    es_write_log "ERROR" "Chaos injection: elk-error triggered via /failure/error endpoint" "elk-error" "$id"
+    ok "Chaos experiment logged directly to Elasticsearch (id=$id)"
+  else
+    warn "Elasticsearch not reachable — log only in experiment registry"
+  fi
+  exp_active_add elk-error "${id}" ""
+  echo
+  echo "  >>> Check Elasticsearch: 'logs-opensre-*' index for ERROR level logs from catalog-api"
+  echo "  >>> Also check Kibana Discover for chaos_experiment_id=$id"
+  echo "  >>> Then run './chaos/runbook.sh recover elk-recover' to clear state"
+}
+
+elk_connection_refused() {
+  banner "Injecting failure: ELK CONNECTION REFUSED LOG SIGNAL"
+  step "Triggering /failure/connection-refused on catalog-api"
+  local pod
+  pod=$(kubectl --context "${CLUSTER}" get pod -n "${CATALOG_NS}" -l app=catalog-api \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [[ -z "${pod}" ]]; then
+    warn "No catalog-api pod found — cannot inject ELK connection refused signal"
+    return
+  fi
+  kubectl --context "${CLUSTER}" exec -n "${CATALOG_NS}" "${pod}" -- \
+    python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/failure/connection-refused', timeout=10)" \
+    >/dev/null 2>&1 || true
+  ok "CONNECTION REFUSED log signal injected — Fluent Bit forwards to Elasticsearch"
+
+  # Also write directly to ES with experiment ID for traceability
+  local id
+  id="$(exp_record inject elk-connection-refused "${pod}" "" "CONNECTION REFUSED log signal")"
+  if es_check; then
+    es_write_log "ERROR" "Chaos injection: elk-connection-refused triggered via /failure/connection-refused endpoint" "elk-connection-refused" "$id"
+    ok "Chaos experiment logged directly to Elasticsearch (id=$id)"
+  else
+    warn "Elasticsearch not reachable — log only in experiment registry"
+  fi
+  exp_active_add elk-connection-refused "${id}" ""
+  echo
+  echo "  >>> Check Elasticsearch: 'logs-opensre-*' index for CONNECTION REFUSED logs"
+  echo "  >>> Also check Kibana Discover for chaos_experiment_id=$id"
+  echo "  >>> Then run './chaos/runbook.sh recover elk-recover' to clear state"
+}
+
+elk_timeout() {
+  banner "Injecting failure: ELK TIMEOUT LOG SIGNAL"
+  step "Triggering /failure/timed-out on catalog-api"
+  local pod
+  pod=$(kubectl --context "${CLUSTER}" get pod -n "${CATALOG_NS}" -l app=catalog-api \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [[ -z "${pod}" ]]; then
+    warn "No catalog-api pod found — cannot inject ELK timeout signal"
+    return
+  fi
+  kubectl --context "${CLUSTER}" exec -n "${CATALOG_NS}" "${pod}" -- \
+    python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/failure/timed-out', timeout=10)" \
+    >/dev/null 2>&1 || true
+  ok "TIMEOUT/TIMED OUT log signal injected — Fluent Bit forwards to Elasticsearch"
+
+  # Also write directly to ES with experiment ID for traceability
+  local id
+  id="$(exp_record inject elk-timeout "${pod}" "" "TIMEOUT log signal")"
+  if es_check; then
+    es_write_log "WARNING" "Chaos injection: elk-timeout triggered via /failure/timed-out endpoint" "elk-timeout" "$id"
+    ok "Chaos experiment logged directly to Elasticsearch (id=$id)"
+  else
+    warn "Elasticsearch not reachable — log only in experiment registry"
+  fi
+  exp_active_add elk-timeout "${id}" ""
+  echo
+  echo "  >>> Check Elasticsearch: 'logs-opensre-*' index for TIMEOUT/TIMED OUT logs"
+  echo "  >>> Also check Kibana Discover for chaos_experiment_id=$id"
+  echo "  >>> Then run './chaos/runbook.sh recover elk-recover' to clear state"
+}
+  kubectl --context "${CLUSTER}" exec -n "${CATALOG_NS}" "${pod}" -- \
+    python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/failure/timed-out', timeout=10)" \
+    >/dev/null 2>&1 || true
+  ok "TIMEOUT/TIMED OUT log signal injected — Fluent Bit forwards to Elasticsearch"
+  local id
+  id="$(exp_record inject elk-timeout "${pod}" "" "TIMEOUT log signal")"
+  exp_active_add elk-timeout "${id}" ""
+  echo
+  echo "  >>> Check Elasticsearch: 'logs-*' index for TIMEOUT/TIMED OUT logs"
+  echo "  >>> Then run './chaos/runbook.sh recover elk-recover' to clear state"
+}
+
+elk_recover() {
+  banner "Recovery: CLEAR ELK DEMO FAILURE STATE"
+  ok "ELK demo state cleared — no persistent fault to remove (log signal was transient)"
+  exp_active_remove elk-error
+  exp_active_remove elk-connection-refused
+  exp_active_remove elk-timeout
+}
+
 # ---------- Failure: Node cordon -------------------------------------------
 node_cordon() {
   banner "Injecting failure: CORDON WORKER NODE (${WORKER_NODE})"
@@ -541,6 +773,42 @@ recover() {
       id="$(exp_record recover network-latency-off "${NODE_CONTAINER}" "" "")"
       exp_active_remove node-network-latency
       ;;
+    coredns-up)
+      step "Restoring CoreDNS deployment replicas"
+      want="${COREDNS_REPLICAS_DEFAULT}"
+      if exp_active_has coredns-down; then
+        saved=$(python3 -c '
+import json, re, sys
+try:
+    info = json.load(open(sys.argv[1])).get("coredns-down", {})
+    m = re.search(r"replicas=(\d+)", info.get("params", ""))
+    print(m.group(1) if m else "")
+except Exception:
+    print("")
+' "${EXPERIMENTS_DIR}/active.json" 2>/dev/null || true)
+        [[ "${saved}" =~ ^[0-9]+$ && "${saved}" != "0" ]] && want="${saved}"
+      fi
+      kubectl --context "${CLUSTER}" scale deploy "${COREDNS_DEPLOY}" -n "${COREDNS_NS}" --replicas="${want}"
+      if kubectl --context "${CLUSTER}" rollout status deploy/"${COREDNS_DEPLOY}" -n "${COREDNS_NS}" --timeout=90s; then
+        ok "CoreDNS restored (${want} replicas, rollout complete)"
+        id="$(exp_record recover coredns-up "${COREDNS_DEPLOY}" "replicas=${want}" "")"
+        exp_active_remove coredns-down
+      else
+        fail "CoreDNS rollout did not complete"; return 1
+      fi
+      ;;
+    coredns-latency-off)
+      step "Removing DNS-latency netem delay"
+      coredns_latency_off
+      id="$(exp_record recover coredns-latency-off "${NODE_CONTAINER}" "" "")"
+      exp_active_remove coredns-latency
+      ;;
+    elk-recover)
+      step "Clearing ELK demo failure state"
+      elk_recover
+      id="$(exp_record recover elk-recover "elk" "" "")"
+      ok "ELK demo state cleared"
+      ;;
     uncordon)
       step "Uncordoning worker node"
       kubectl --context "${CLUSTER}" uncordon "${WORKER_NODE}" >/dev/null 2>&1 || true
@@ -558,6 +826,11 @@ recover() {
       recover latency-off || true
       recover flaky-latency-off || true
       recover network-latency-off || true
+      exp_active_has coredns-down && { recover coredns-up || true; }
+      exp_active_has coredns-latency && { recover coredns-latency-off || true; }
+      exp_active_has elk-error && { recover elk-recover || true; }
+      exp_active_has elk-connection-refused && { recover elk-recover || true; }
+      exp_active_has elk-timeout && { recover elk-recover || true; }
       recover uncordon || true
       kubectl --context "${CLUSTER}" rollout status deploy "${CATALOG_DEPLOY}" -n "${CATALOG_NS}" \
         >/dev/null 2>&1 && ok "catalog-api running" || warn "catalog-api not scaling"
@@ -594,6 +867,10 @@ show_status() {
   kubectl --context "${CLUSTER}" get pods -n "${CATALOG_NS}" -o wide 2>/dev/null || true
 
   echo
+  echo "--- CoreDNS pods (${COREDNS_NS}) ---"
+  kubectl --context "${CLUSTER}" get pods -n "${COREDNS_NS}" -l "${COREDNS_LABEL}" -o wide 2>/dev/null || true
+
+  echo
   echo "--- Sign of life checks ---"
   if (command docker ps 2>/dev/null || command podman ps 2>/dev/null) | grep -q aerospike; then
     ok "Aerospike: RUNNING"
@@ -612,9 +889,29 @@ show_status() {
     Ready) ok "Worker node: Ready" ;;
     *) warn "Worker node: ${node_state:-unknown}" ;;
   esac
+  local coredns_ready
+  coredns_ready=$(kubectl --context "${CLUSTER}" get pods -n "${COREDNS_NS}" -l "${COREDNS_LABEL}" --no-headers 2>/dev/null | awk '$3=="Running"' | wc -l | tr -d ' ' || true)
+  case "${coredns_ready:-0}" in
+    0) fail "CoreDNS: DOWN (0 Running pods)" ;;
+    *) ok "CoreDNS: ${coredns_ready} Running pod(s)" ;;
+  esac
 
   echo
   exp_active_show
+}
+
+exp_active_has() {
+  # exp_active_has <fault> — exit 0 when the fault is currently tracked active
+  local fault="$1"
+  [[ -f "${EXPERIMENTS_DIR}/active.json" ]] && python3 -c '
+import json, sys
+fault, path = sys.argv[1:3]
+try:
+    data = json.load(open(path))
+except Exception:
+    data = {}
+sys.exit(0 if fault in data else 1)
+' "$fault" "${EXPERIMENTS_DIR}/active.json" 2>/dev/null
 }
 
 # ---------- Dispatch -------------------------------------------------------
@@ -632,6 +929,12 @@ main() {
     pod-memory)       preflight; pod_memory ;;
     pod-latency)      preflight; pod_latency ;;
     flaky-latency)    preflight; flaky_latency ;;
+    coredns-kill)     preflight; coredns_kill ;;
+    coredns-down)     preflight; coredns_down ;;
+    coredns-latency)  preflight; coredns_latency ;;
+    elk-error)        preflight; elk_error ;;
+    elk-connection-refused) preflight; elk_connection_refused ;;
+    elk-timeout)      preflight; elk_timeout ;;
     system-pod-kill)  preflight; system_pod_kill ;;
     node-cordon)      preflight; node_cordon ;;
     node-drain)       preflight; node_drain ;;
