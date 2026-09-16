@@ -101,6 +101,9 @@ Actions are whitelisted on the backend (`app/routes/chaos.py`) and delegate to
 | `./chaos/runbook.sh flaky-latency` | +3s extra latency on all flaky-service traffic (`FLAKY_LATENCY_MS` overrides) | **Latency** page → flaky-service p50/p95/p99 climbs |
 | `./chaos/runbook.sh node-network-latency` | Adds 500ms `netem` delay to the worker node egress (`NODE_LATENCY_MS` overrides) | **Latency** page → every in-cluster caller's latency climbs |
 | `./chaos/runbook.sh system-pod-kill` | Deletes a kube-system pod (default `coredns`) | `kubectl get pods -A` → pod self-heals |
+| `./chaos/runbook.sh coredns-kill` | Deletes one CoreDNS pod (self-heal, restart evidence) | **Chaos** page CoreDNS card → probe blip; `kubectl get pods -n kube-system -l k8s-app=kube-dns` |
+| `./chaos/runbook.sh coredns-down` | Scales CoreDNS deployment to 0 (sustained DNS outage, demo cluster only) | CoreDNS probe → `failing`; pod logs/events show the outage |
+| `./chaos/runbook.sh coredns-latency` | Adds `COREDNS_LATENCY_MS` (default 300ms) `netem` delay to worker egress | CoreDNS probe avg latency climbs; CoreDNS pods stay `Running` |
 | `./chaos/runbook.sh node-cordon` | Marks worker `SchedulingDisabled` | **Kubernetes** page → node `SchedulingDisabled` |
 | `./chaos/runbook.sh node-drain` | Evicts pods off the worker | **Kubernetes** page → workload pods evicted |
 
@@ -125,6 +128,8 @@ Actions are whitelisted on the backend (`app/routes/chaos.py`) and delegate to
 ./chaos/runbook.sh recover latency-off           # clear the injected catalog-api latency
 ./chaos/runbook.sh recover flaky-latency-off     # clear the injected flaky-service latency
 ./chaos/runbook.sh recover network-latency-off   # remove the node netem delay
+./chaos/runbook.sh recover coredns-up            # restore CoreDNS replicas (verifies rollout)
+./chaos/runbook.sh recover coredns-latency-off   # remove the DNS-demo netem delay
 ./chaos/runbook.sh recover uncordon              # uncordon the worker node
 ./chaos/runbook.sh recover all                   # restore everything
 ```
@@ -182,9 +187,17 @@ the after-window returns to that bound.
    verdict (Steady-state hypothesis).
 7. **Node cordon/drain** — show `SchedulingDisabled` and evictions.
 8. **Analyze with OpenSRE** — on the **AI Analysis** page, select the affected
-   pod → **Run investigation** → show root-cause + validity score. Use the
-   **Kubernetes** page "Investigate" button for the raw evidence (pod details,
-   events, metrics).
+    pod → **Run investigation** → show root-cause + validity score. Use the
+    **Kubernetes** page "Investigate" button for the raw evidence (pod details,
+    events, metrics).
+9. **CoreDNS/DNS demo** — on the **Chaos** page, CoreDNS card:
+    `Pod kill` / `Down (scale 0)` / `Latency` → DNS probe flips to
+    degraded/slow/failing → **Investigate CoreDNS** collects CoreDNS pod
+    state/logs/events, the live resolution probe, VictoriaMetrics signals and
+    affected workloads, then OpenSRE reports DNS/CoreDNS as the likely root
+    cause with evidence + timeline + remediation → **Recover CoreDNS**.
+    Same flow works headless: `POST /api/demo/coredns/{fail,investigate,recover}`,
+    `GET /api/coredns/{health,probe,metrics,evidence,investigate}`.
 
 ## Options / environment
 

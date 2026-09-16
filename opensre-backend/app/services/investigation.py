@@ -3,7 +3,9 @@ import socket
 from app.core.config import settings
 from app.services import aerospike
 from app.services import containers
+from app.services import coredns as coredns_service
 from app.services import db_investigation
+from app.services import elasticsearch as elasticsearch_service
 from app.services import git_correlation
 from app.services import grafana
 from app.services import k8s_log_analysis
@@ -399,6 +401,41 @@ def collect_pod_evidence(
     # VictoriaMetrics per-pod traffic + latency metrics (kubernetes-pods job)
     evidence["metrics"]["pod"] = _collect_pod_metrics(pod_name)
 
+    # Elasticsearch logs for this pod (ERROR/EXCEPTION/TIMEOUT signals)
+    try:
+        es_logs = elasticsearch_service.get_pod_logs(
+            pod_name, namespace, since_minutes=60, limit=100,
+        )
+        if es_logs.get("success") and es_logs.get("total", 0) > 0:
+            evidence["elasticsearch"] = {
+                "health": elasticsearch_service.elk_health(),
+                "pod_logs_tail": es_logs.get("stdout", "")[-3000:],
+                "log_total": es_logs.get("total", 0),
+                "signal_counts": elasticsearch_service.find_error_patterns(
+                    namespace=namespace, since_minutes=60, limit=20,
+                ).get("patterns_found", 0),
+            }
+        else:
+            evidence["elasticsearch"] = {
+                "health": elasticsearch_service.elk_health(),
+                "error": es_logs.get("error", "ES unavailable or no logs"),
+            }
+    except Exception as exc:
+        evidence["elasticsearch"] = {
+            "health": elasticsearch_service.elk_health(),
+            "error": str(exc)[:300],
+        }
+
+    # Compact CoreDNS/DNS evidence so every pod investigation is DNS-aware:
+    # DNS resolution failures surface here even when the alert names a pod.
+    # Log tails are dropped (counts + probe + health are what matter here).
+    try:
+        evidence["coredns"] = _collect_coredns_summary(
+            {}, context, include_logs=False
+        ).get("coredns", {})
+    except Exception as exc:
+        evidence["coredns"] = {"error": str(exc)[:300]}
+
     evidence["git"] = git_correlation.correlate_commits(incident_start=None)
 
     return {
@@ -733,6 +770,86 @@ def _collect_nginx_summary(evidence, context: str | None = None):
         evidence["nginx"] = {"success": False, "error": str(exc)}
 
 
+def _collect_coredns_summary(
+    evidence,
+    context: str | None = None,
+    tail: int = 150,
+    include_logs: bool = True,
+):
+    """Bounded CoreDNS/DNS evidence for stack- and pod-level investigations."""
+    try:
+        coredns_ev = coredns_service.investigate_coredns(
+            context=context, tail=tail
+        )
+        node = coredns_ev.get("coredns", coredns_ev)
+        if not include_logs and isinstance(node, dict):
+            node = dict(node)
+            logs = node.get("logs")
+            if isinstance(logs, dict):
+                logs = dict(logs)
+                logs.pop("aggregated_raw", None)
+                per_pod = logs.get("per_pod")
+                if isinstance(per_pod, list):
+                    logs["per_pod"] = [
+                        {k: v for k, v in entry.items() if k != "logs_tail"}
+                        for entry in per_pod
+                        if isinstance(entry, dict)
+                    ]
+                node["logs"] = logs
+        evidence["coredns"] = node
+    except Exception as exc:
+        evidence["coredns"] = {"success": False, "error": str(exc)}
+
+
+def collect_coredns_evidence(
+    context: str | None = None,
+    tail: int = 150,
+    include_affected: bool = True,
+):
+    """
+    Collect comprehensive CoreDNS/DNS investigation evidence and correlate it
+    with cluster metrics, affected workloads and GitHub — read-only, safe.
+    Keeps CoreDNS investigation independent of database integrations.
+    """
+    coredns_ev = coredns_service.investigate_coredns(
+        context=context, tail=tail
+    )
+
+    evidence: dict = {
+        "target": {"type": "coredns", "name": "coredns"},
+        "cluster": context,
+        "coredns": coredns_ev.get("coredns", coredns_ev),
+        "affected": {},
+        "victoriametrics": {},
+        "git": {},
+    }
+
+    # Possibly-affected workloads: opensre namespace snapshot (bounded).
+    if include_affected:
+        try:
+            evidence["affected"] = _namespace_summary("opensre", context)
+        except Exception as exc:
+            evidence["affected"] = {"error": str(exc)}
+
+    # Cluster request/error/latency context for the "Metrics" investigation step.
+    try:
+        _collect_vm_summary(evidence)
+    except Exception as exc:
+        evidence["victoriametrics"] = {"error": str(exc)}
+
+    evidence["git"] = git_correlation.correlate_commits(incident_start=None)
+
+    # Aggregated CoreDNS summary for top-level convenience.
+    coredns_summary = (
+        evidence["coredns"].get("summary")
+        if isinstance(evidence.get("coredns"), dict)
+        else {}
+    )
+    evidence["summary"] = coredns_summary
+
+    return {"success": True, "evidence": evidence}
+
+
 def collect_nginx_evidence(context: str | None = None, tail: int = 250):
     """
     Collect comprehensive Nginx investigation evidence and correlate it
@@ -771,6 +888,49 @@ def collect_nginx_evidence(context: str | None = None, tail: int = 250):
     return {"success": True, "evidence": evidence}
 
 
+def collect_elasticsearch_evidence(
+    namespace: str | None = None,
+    pod: str | None = None,
+    service: str | None = None,
+    since_minutes: int = 60,
+    limit: int = 50,
+):
+    """
+    Collect structured Elasticsearch evidence for investigation.
+    Read-only — no write/delete/index operations.
+    Independent of databases.
+    """
+    summary = elasticsearch_service.error_summary(
+        namespace=namespace, since_minutes=since_minutes,
+    )
+    patterns = elasticsearch_service.find_error_patterns(
+        namespace=namespace, since_minutes=since_minutes, limit=limit,
+    )
+    logs = elasticsearch_service.search_logs(
+        namespace=namespace, service=service,
+        pod=pod, since_minutes=since_minutes, limit=limit,
+    )
+    evidence: dict = {
+        "target": {"type": "elasticsearch", "name": "elk"},
+        "elasticsearch": {
+            "health": elasticsearch_service.elk_health(),
+            "summary": summary.get("counts", {}),
+            "error_samples": patterns.get("results", [])[:10],
+            "logs": logs.get("hits", []),
+            "patterns_found": patterns.get("patterns_found", 0),
+        },
+        "victoriametrics": {},
+    }
+    try:
+        _collect_vm_summary(evidence)
+    except Exception as exc:
+        evidence["victoriametrics"] = {"error": str(exc)}
+
+    evidence["git"] = git_correlation.correlate_commits(incident_start=None)
+
+    return {"success": True, "evidence": evidence}
+
+
 def collect_stack_evidence(context: str | None = None):
     """
     Collect evidence for the entire observability stack (Kubernetes,
@@ -781,11 +941,12 @@ def collect_stack_evidence(context: str | None = None):
         "target": {
             "type": STACK_TARGET,
             "name": "opensre-demo observability stack",
-            "components": ["kubernetes", "victoriametrics", "opentelemetry",
-                           "grafana"],
+            "components": ["kubernetes", "coredns", "victoriametrics",
+                           "opentelemetry", "grafana"],
         },
         "cluster": context,
         "kubernetes": {},
+        "coredns": {},
         "victoriametrics": {},
         "opentelemetry": {},
         "grafana": {},
@@ -794,6 +955,7 @@ def collect_stack_evidence(context: str | None = None):
     }
 
     _collect_kubernetes_summary(evidence, context)
+    _collect_coredns_summary(evidence, context)
     _collect_vm_summary(evidence)
     _collect_otel_summary(evidence, context)
     _collect_grafana_summary(evidence)
@@ -1034,6 +1196,25 @@ def collect_alert_evidence(
     except Exception:
         pass
 
+    # CoreDNS/DNS-specific path: DNS latency / resolution-failure alerts get
+    # CoreDNS evidence (pods, logs, probe, metrics) + affected workloads.
+    # Runs after the nginx branch so gateway alerts keep nginx priority.
+    if evidence is None:
+        try:
+            if coredns_service.is_coredns_alert(alert):
+                result = collect_coredns_evidence(context)
+                if result.get("success"):
+                    evidence = result["evidence"]
+                    evidence["target"] = {
+                        "type": "coredns",
+                        "namespace": namespace
+                        or evidence.get("coredns", {}).get(
+                            "namespace", "kube-system"),
+                        "name": "coredns",
+                    }
+        except Exception:
+            pass
+
     if evidence is None and namespace and pod:
         result = collect_pod_evidence(namespace, pod, context)
 
@@ -1245,6 +1426,22 @@ def _evidence_digest(alert: dict, evidence: dict, git_corr=None, max_chars: int 
         ]
         lines.append("pod metrics (last 1m): " + ", ".join(pieces))
 
+    # Elasticsearch log signals summary
+    es = evidence.get("elasticsearch") or {}
+    if es.get("health", {}).get("success") and es.get("signal_counts", 0) > 0:
+        lines.append(
+            f"ES log signals: {es.get('signal_counts')} ERROR/EXCEPTION/TIMEOUT patterns "
+            f"(total logs: {es.get('log_total', 0)})"
+        )
+    if es.get("health", {}).get("success") and es.get("error") is None and es.get("pod_logs_tail"):
+        sample_lines = es.get("pod_logs_tail", "").splitlines()
+        error_signals = [l for l in sample_lines if any(
+            tok in l.lower() for tok in ["error", "exception", "timeout", "failed"])]
+        if error_signals:
+            lines.append("notable log entries:")
+            for l in error_signals[:5]:
+                lines.append(f"  - {l[:200]}")
+
     ns = k8s.get("namespace")
     if isinstance(ns, dict) and ns.get("status_counts"):
         counts = ", ".join(
@@ -1352,6 +1549,74 @@ def _evidence_digest(alert: dict, evidence: dict, git_corr=None, max_chars: int 
         if isinstance(err, dict) and err.get("interesting_tail"):
             for l in err["interesting_tail"][:3]:
                 lines.append(f"nginx log: {l[:180]}")
+
+    # CoreDNS/DNS summary (when present: stack, pod, alert or coredns evidence)
+    coredns = evidence.get("coredns") or {}
+    if isinstance(coredns, dict) and (
+        coredns.get("summary") or coredns.get("health_status")
+        or coredns.get("pods") or coredns.get("error")
+    ):
+        summary = coredns.get("summary") or {}
+        if coredns.get("error") and not summary:
+            lines.append(f"coredns: evidence unavailable ({coredns['error']})")
+        else:
+            health_status = summary.get("health_status") or coredns.get(
+                "health_status")
+            pods_total = summary.get("total_pods")
+            if health_status:
+                pieces = [f"health={health_status}"]
+                if pods_total:
+                    pieces.append(
+                        f"pods={summary.get('running_pods', '?')}/"
+                        f"{pods_total} running"
+                    )
+                restarts = summary.get("restart_count_total")
+                if restarts:
+                    pieces.append(f"restarts={restarts}")
+                lines.append("coredns " + ", ".join(pieces))
+            probe_verdict = summary.get("probe_verdict")
+            if probe_verdict:
+                probe_line = (
+                    f"coredns dns probe: {probe_verdict} "
+                    f"({summary.get('probe_succeeded', '?')}/"
+                    f"{summary.get('probe_attempts', '?')} ok"
+                )
+                if summary.get("probe_latency_ms_avg") is not None:
+                    probe_line += (
+                        f", avg={summary['probe_latency_ms_avg']}ms"
+                    )
+                probe_line += ")"
+                lines.append(probe_line)
+            dns_pieces = []
+            if summary.get("servfail"):
+                dns_pieces.append(f"SERVFAIL={summary['servfail']}")
+            if summary.get("dns_timeouts"):
+                dns_pieces.append(f"timeouts={summary['dns_timeouts']}")
+            if summary.get("dns_refused"):
+                dns_pieces.append(f"refused={summary['dns_refused']}")
+            if summary.get("forward_errors"):
+                dns_pieces.append(
+                    f"forward_errors={summary['forward_errors']}")
+            if summary.get("loop_detected"):
+                dns_pieces.append("loop_detected")
+            if dns_pieces:
+                lines.append("coredns dns failures: " + ", ".join(dns_pieces))
+            elif summary and not summary.get("servfail") and (
+                summary.get("log_lines")
+            ):
+                lines.append(
+                    f"coredns logs: {summary['log_lines']} lines, "
+                    "no SERVFAIL/timeout/forward errors in tail"
+                )
+            log_analysis = coredns.get("log_analysis") or {}
+            interesting = log_analysis.get("interesting_tail") or []
+            for line in interesting[:3]:
+                lines.append(f"coredns log: {line[:180]}")
+            probe = coredns.get("probe") or {}
+            if isinstance(probe, dict) and probe.get("error") and not probe.get(
+                "available"
+            ):
+                lines.append(f"coredns probe: unavailable ({probe['error']})")
 
     git_lines = git_correlation.git_digest_lines(git_corr)
     if git_lines:

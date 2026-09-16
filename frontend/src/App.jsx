@@ -13,6 +13,7 @@ import Incident from "./pages/Incident";
 import Settings from "./pages/Settings";
 import GitHub from "./pages/GitHub";
 import Chaos from "./pages/Chaos";
+import Logs from "./pages/Logs";
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
         <Route path="/kubernetes" element={<Kubernetes />} />
         <Route path="/metrics" element={<Metrics />} />
         <Route path="/latency" element={<Latency />} />
+        <Route path="/logs" element={<Logs />} />
         <Route path="/aerospike" element={<Aerospike />} />
         <Route path="/yugabyte" element={<Yugabyte />} />
         <Route path="/analysis" element={<AIAnalysis />} />

@@ -24,6 +24,14 @@ import re
 LOG_SIGNAL_PATTERNS = [
     ("oom_killed", re.compile(r"OOMKilled|out of memory|memory cgroup out of memory", re.IGNORECASE)),
     ("traceback", re.compile(r"Traceback \(most recent call last\)", re.IGNORECASE)),
+    # DNS resolution failures (kept ahead of generic timeout/connection
+    # patterns so DNS-attributed lines keep DNS attribution).
+    ("dns_failure", re.compile(
+        r"temporary failure in name resolution|name or service not known"
+        r"|no such host|SERVFAIL|NXDOMAIN.*SERVFAIL|host not found in upstream"
+        r"|no resolver defined|could not resolve|could not be resolved"
+        r"|name does not resolve|i/o timeout.*\(.*:53\)|read udp.*:53.*i/o timeout",
+        re.IGNORECASE)),
     ("connection_refused", re.compile(r"connection refused|ECONNREFUSED", re.IGNORECASE)),
     ("timeout", re.compile(r"\btimed?\s?out\b|TimeoutError|deadline exceeded", re.IGNORECASE)),
     ("exception", re.compile(r"\b\w*(Exception|Error)\b\s*[:\[]|raise\s+\w*(Exception|Error)", re.IGNORECASE)),

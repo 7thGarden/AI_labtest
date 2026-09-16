@@ -1,10 +1,15 @@
 import asyncio
+import logging
 
 from fastapi import Depends, FastAPI
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.core import latency
+from app.core.logging import configure_logging
 from app.routes import failure, health, products
+
+configure_logging(service="catalog-api", level="INFO")
+logger = logging.getLogger("catalog-api")
 
 app = FastAPI(
     title="Catalog API",

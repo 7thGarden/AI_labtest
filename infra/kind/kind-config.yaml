@@ -12,3 +12,13 @@ nodes:
         hostPort: 3000
         listenAddress: 127.0.0.1
         protocol: TCP
+      # Elasticsearch HTTP
+      - containerPort: 30920
+        hostPort: 9200
+        listenAddress: 127.0.0.1
+        protocol: TCP
+      # Kibana HTTP
+      - containerPort: 30001
+        hostPort: 3001
+        listenAddress: 127.0.0.1
+        protocol: TCP

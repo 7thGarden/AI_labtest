@@ -14,6 +14,10 @@ from app.routes.demo import router as demo_router
 from app.routes.db_investigation import router as db_investigation_router
 from app.routes.nginx import router as nginx_router
 from app.routes.nginx_demo import router as nginx_demo_router
+from app.routes.coredns import router as coredns_router
+from app.routes.coredns_demo import router as coredns_demo_router
+from app.routes.elasticsearch import router as elasticsearch_router
+from app.routes.elk_demo import router as elk_demo_router
 
 app = FastAPI(
     title="OpenSRE Backend",
@@ -42,6 +46,10 @@ app.include_router(demo_router)
 app.include_router(db_investigation_router)
 app.include_router(nginx_router)
 app.include_router(nginx_demo_router)
+app.include_router(coredns_router)
+app.include_router(coredns_demo_router)
+app.include_router(elasticsearch_router)
+app.include_router(elk_demo_router)
 
 
 @app.get("/")

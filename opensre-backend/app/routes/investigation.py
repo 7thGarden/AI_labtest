@@ -120,3 +120,32 @@ def nginx_evidence(
     without running an AI investigation. Independent of databases.
     """
     return investigation.collect_nginx_evidence(context=context, tail=tail)
+
+
+@router.get("/evidence/coredns")
+def coredns_evidence(
+    context: str | None = Query(default=None),
+    tail: int = Query(default=150, ge=10, le=1000),
+):
+    """
+    Collect structured CoreDNS + DNS probe + metrics + affected-workload
+    evidence without running an AI investigation. Independent of databases.
+    """
+    return investigation.collect_coredns_evidence(context=context, tail=tail)
+
+
+@router.get("/evidence/elasticsearch")
+def elasticsearch_evidence(
+    namespace: str | None = Query(default=None),
+    pod: str | None = Query(default=None),
+    service: str | None = Query(default=None),
+    since_minutes: int = Query(default=60, ge=1, le=1440),
+):
+    """
+    Collect structured Elasticsearch evidence without running an AI
+    investigation. Read-only; no write/delete/index operations.
+    """
+    return investigation.collect_elasticsearch_evidence(
+        namespace=namespace, pod=pod, service=service,
+        since_minutes=since_minutes,
+    )

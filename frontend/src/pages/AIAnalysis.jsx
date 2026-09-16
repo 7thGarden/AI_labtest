@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { Link } from "react-router-dom";
-import api, { dbInvestigationApi, nginxDemoApi } from "../api/api";
+import api, { dbInvestigationApi } from "../api/api";
 import Card from "../components/Card";
 import Badge from "../components/Badge";
 import ProblemFraming from "../components/ProblemFraming";
@@ -20,7 +20,6 @@ import {
   Gauge,
    ListChecks,
    FileText,
-   Globe,
    Database,
   HardDrive,
   Layers,
@@ -30,6 +29,7 @@ import {
   AlertCircle,
   CheckCircle,
   XCircle,
+  Activity,
 } from "lucide-react";
 
 function DatabaseEvidenceDisplay({ evidence, targetType }) {
@@ -201,16 +201,15 @@ export default function AIAnalysis() {
   );
   const [gitCorrelation, setGitCorrelation] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [nginxEvidence, setNginxEvidence] = useState(null);
-  const [nginxEvidenceLoading, setNginxEvidenceLoading] = useState(false);
-  const [nginxEvidenceError, setNginxEvidenceError] = useState(null);
-  const [nginxLoading, setNginxLoading] = useState(false);
 
   const [message, setMessage] = useState("");
   const [chat, setChat] = useSessionState("opensre:chat", []);
   const [chatLoading, setChatLoading] = useState(false);
 
   const [podsLoading, setPodsLoading] = useState(false);
+
+  const [vmMetrics, setVmMetrics] = useState(null);
+  const [esSignals, setEsSignals] = useState(null);
 
   const chatEndRef = useRef(null);
   const initialDataRef = useRef({ clusters: clusters.length, pods: pods.length });
@@ -373,11 +372,20 @@ export default function AIAnalysis() {
     };
   }, [targetType]);
 
+  useEffect(() => {
+    if (targetType !== "pod") {
+      setVmMetrics(null);
+      setEsSignals(null);
+    }
+  }, [targetType]);
+
   async function investigatePod() {
     if (targetType === "pod" && (!namespace || !podName)) return;
 
     setLoading(true);
     setInvestigation(null);
+    setVmMetrics(null);
+    setEsSignals(null);
 
     try {
       let response;
@@ -412,6 +420,10 @@ export default function AIAnalysis() {
         const stdout = stripAnsi(data.stdout || "");
         setInvestigation({ stdout, report: extractReport(stdout) });
 
+        // Capture VictoriaMetrics pod metrics and ES log signals
+        if (data.vm_metrics) setVmMetrics(data.vm_metrics);
+        if (data.es_signals) setEsSignals(data.es_signals);
+
         try {
           const corrRes = await api.get("/investigation/git-correlation", {
             params: { limit: 10 },
@@ -434,51 +446,6 @@ export default function AIAnalysis() {
       setInvestigation({ error: err.message });
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function checkNginxEvidence() {
-    setNginxEvidenceLoading(true);
-    setNginxEvidenceError(null);
-    setNginxEvidence(null);
-    try {
-      const res = await nginxDemoApi.evidence();
-      if (res.data?.success) {
-        setNginxEvidence(res.data.evidence);
-      } else {
-        setNginxEvidenceError(res.data?.error || "Failed to collect Nginx evidence.");
-      }
-    } catch (err) {
-      setNginxEvidenceError(err.message || "Failed to collect Nginx evidence.");
-    } finally {
-      setNginxEvidenceLoading(false);
-    }
-  }
-
-  async function investigateNginx() {
-    setNginxLoading(true);
-    setInvestigation(null);
-    try {
-      const res = await nginxDemoApi.opensreInvestigate();
-      const data = res.data;
-      if (!data.success) {
-        setInvestigation({ error: data.stderr || data.error || "Nginx investigation failed." });
-        setGitCorrelation(null);
-      } else {
-        const stdout = stripAnsi(data.stdout || "");
-        setInvestigation({ stdout, report: extractReport(stdout) });
-        try {
-          const corrRes = await api.get("/investigation/git-correlation", { params: { limit: 10 } });
-          setGitCorrelation(corrRes.data.success ? corrRes.data : null);
-        } catch {
-          setGitCorrelation(null);
-        }
-      }
-      setInvestigationTarget("nginx");
-    } catch (err) {
-      setInvestigation({ error: err.message });
-    } finally {
-      setNginxLoading(false);
     }
   }
 
@@ -727,63 +694,6 @@ export default function AIAnalysis() {
         )}
       </Card>
 
-      <Card
-        title="Nginx shortcut"
-        subtitle="Evidence collects in seconds — the OpenSRE call can take several minutes"
-        actions={
-          nginxEvidence?.nginx?.summary ? (
-            <Badge tone={(nginxEvidence.nginx.summary.http_5xx || 0) > 0 ? "warning" : "success"}>
-              5xx {nginxEvidence.nginx.summary.http_5xx ?? "—"} · 502 {nginxEvidence.nginx.summary.http_502 ?? "—"} · 504 {nginxEvidence.nginx.summary.http_504 ?? "—"}
-            </Badge>
-          ) : (
-            <Badge tone="neutral"><Globe size={11} /> nginx</Badge>
-          )
-        }
-      >
-        <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", alignItems: "center" }}>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            onClick={checkNginxEvidence}
-            disabled={nginxEvidenceLoading || nginxLoading}
-          >
-            {nginxEvidenceLoading ? <Loader2 size={14} className="btn__spinner" /> : <Table size={14} />}
-            Check Nginx evidence (fast)
-          </button>
-          <button
-            type="button"
-            className="btn btn--primary btn--sm"
-            onClick={investigateNginx}
-            disabled={nginxEvidenceLoading || nginxLoading}
-          >
-            {nginxLoading ? <Loader2 size={14} className="btn__spinner" /> : <Search size={14} />}
-            {nginxLoading ? "Investigating Nginx…" : "Investigate Nginx with OpenSRE"}
-          </button>
-          <Link to="/chaos" className="btn btn--ghost btn--sm">
-            <Globe size={13} /> Inject Nginx failure
-          </Link>
-        </div>
-        {nginxEvidenceError && (
-          <div className="alert alert--danger" style={{ marginTop: "var(--space-3)" }}>
-            {nginxEvidenceError}
-          </div>
-        )}
-        {nginxEvidence && (
-          <div className="text-muted" style={{ fontSize: 13, marginTop: "var(--space-3)" }}>
-            Health: {(nginxEvidence.nginx?.health?.status) || (nginxEvidence.nginx?.health_status) || "—"}
-            {" · "}Config: {String(nginxEvidence.nginx?.config_validation?.valid ?? nginxEvidence.nginx?.config_status ?? "—")}
-            {" · "}Conn refused: {nginxEvidence.nginx?.summary?.connection_refused ?? "—"}
-            {" · "}Timeouts: {nginxEvidence.nginx?.summary?.upstream_timeout ?? "—"}
-            {" · "}DNS: {nginxEvidence.nginx?.summary?.dns_failures ?? "—"}
-          </div>
-        )}
-        {nginxLoading && (
-          <div className="text-muted" style={{ fontSize: 13, marginTop: "var(--space-2)" }}>
-            Collecting Nginx + Kubernetes/metrics/GitHub evidence, then waiting on the OpenSRE model — this can take several minutes. Results appear in the Investigation report below.
-          </div>
-        )}
-      </Card>
-
       {(targetType === "yugabyte" || targetType === "aerospike") && (
         <Card
           title="Database evidence"
@@ -936,6 +846,88 @@ export default function AIAnalysis() {
                     </div>
                   </div>
 
+                  {/* VictoriaMetrics pod metrics */}
+                  {vmMetrics && Object.keys(vmMetrics).length > 0 && (
+                    <div className="report-section">
+                      <div className="report-section__title">
+                        <Activity size={14} style={{ verticalAlign: "middle", marginRight: 4 }} />
+                        VictoriaMetrics (pod)
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)" }}>
+                        <div className="report-metric">
+                          <div className="report-metric__label">Request rate</div>
+                          <div className="report-metric__value cell-mono">
+                            {vmMetrics.request_rate_rps != null ? vmMetrics.request_rate_rps.toFixed(2) : "—"} req/s
+                          </div>
+                        </div>
+                        <div className="report-metric">
+                          <div className="report-metric__label">Error rate (5xx)</div>
+                          <div className="report-metric__value cell-mono">
+                            {vmMetrics.error_rate_5xx_per_s != null ? vmMetrics.error_rate_5xx_per_s.toFixed(2) : "—"} /s
+                          </div>
+                        </div>
+                        <div className="report-metric">
+                          <div className="report-metric__label">Error share</div>
+                          <div className="report-metric__value cell-mono">
+                            {vmMetrics.error_share_percent != null ? vmMetrics.error_share_percent.toFixed(2) : "—"}%
+                          </div>
+                        </div>
+                        <div className="report-metric">
+                          <div className="report-metric__label">P50 latency</div>
+                          <div className="report-metric__value cell-mono">
+                            {vmMetrics.p50_latency_seconds != null ? (vmMetrics.p50_latency_seconds * 1000).toFixed(1) : "—"} ms
+                          </div>
+                        </div>
+                        <div className="report-metric">
+                          <div className="report-metric__label">P95 latency</div>
+                          <div className="report-metric__value cell-mono">
+                            {vmMetrics.p95_latency_seconds != null ? (vmMetrics.p95_latency_seconds * 1000).toFixed(1) : "—"} ms
+                          </div>
+                        </div>
+                        <div className="report-metric">
+                          <div className="report-metric__label">P99 latency</div>
+                          <div className="report-metric__value cell-mono">
+                            {vmMetrics.p99_latency_seconds != null ? (vmMetrics.p99_latency_seconds * 1000).toFixed(1) : "—"} ms
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Elasticsearch log signals */}
+                  {esSignals && esSignals.health && esSignals.health.success && (
+                    <div className="report-section">
+                      <div className="report-section__title">
+                        <Search size={14} style={{ verticalAlign: "middle", marginRight: 4 }} />
+                        Elasticsearch log signals
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)" }}>
+                        <Badge tone={esSignals.signal_counts > 0 ? "danger" : "success"}>
+                          <AlertTriangle size={12} />
+                          {esSignals.signal_counts} signals (ERROR/EXCEPTION/TIMEOUT)
+                        </Badge>
+                        <Badge tone="info">
+                          <Database size={12} />
+                          {esSignals.log_total} total logs (last 60m)
+                        </Badge>
+                        {esSignals.pod_logs_tail && (
+                          <details className="raw-output" style={{ marginTop: "var(--space-2)" }}>
+                            <summary style={{ cursor: "pointer", fontWeight: 500, color: "var(--primary)" }}>
+                              Notable error entries
+                            </summary>
+                            <pre className="code-block code-block--plain" style={{ maxHeight: 200, overflow: "auto", fontSize: 11 }}>
+                              {(() => {
+                                const lines = esSignals.pod_logs_tail.split("\n");
+                                const errors = lines.filter(l => ["error", "exception", "timeout", "failed"].some(tok => l.toLowerCase().includes(tok)));
+                                return errors.slice(0, 10).join("\n") || "No ERROR/EXCEPTION/TIMEOUT lines found";
+                              })()}
+                            </pre>
+                          </details>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {gitCorrelation?.suspected_commit && (
                     <div style={{
                       padding: "var(--space-3)",
@@ -1029,6 +1021,25 @@ export default function AIAnalysis() {
             <span className="chat__context-chip">
               Pod <span>{podName || "—"}</span>
             </span>
+          </div>
+        )}
+        
+        {targetType === "pod" && (vmMetrics || esSignals) && (
+          <div className="chat__context" style={{ marginTop: "var(--space-2)", fontSize: 12 }}>
+            {vmMetrics && (
+              <span className="chat__context-chip" style={{ background: "var(--primary)", color: "white" }}>
+                <Activity size={10} style={{ marginRight: 2 }} />
+                {vmMetrics.request_rate_rps != null ? `${vmMetrics.request_rate_rps.toFixed(1)} req/s` : "no metrics"}
+                {vmMetrics.p99_latency_seconds != null ? ` · p99 ${(vmMetrics.p99_latency_seconds * 1000).toFixed(0)}ms` : ""}
+              </span>
+            )}
+            {esSignals && esSignals.health?.success && (
+              <span className="chat__context-chip" style={{ background: esSignals.signal_counts > 0 ? "var(--danger)" : "var(--success)", color: "white" }}>
+                <Search size={10} style={{ marginRight: 2 }} />
+                {esSignals.signal_counts > 0 ? `${esSignals.signal_counts} ES signals` : "ES: clean"}
+                {esSignals.log_total ? ` · ${esSignals.log_total} logs` : ""}
+              </span>
+            )}
           </div>
         )}
 
