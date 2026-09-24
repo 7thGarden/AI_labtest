@@ -1546,10 +1546,126 @@ def collect_target_evidence(target: str):
             "Unable to collect container logs",
         )
 
+    # Kubernetes workload state for the target (StatefulSet replicas + recent
+    # events). Without it the model can only see "pod not found" and guesses
+    # between eviction vs. deletion vs. crash — a StatefulSet scaled to 0
+    # (chaos/injection) would be mis-attributed to node/eviction causes.
+    evidence["kubernetes"] = _collect_target_workload_evidence(target)
+
     return {
         "success": True,
         "evidence": evidence,
     }
+
+
+def _collect_target_workload_evidence(target: str) -> dict:
+    """StatefulSet + pod + event state for a chaos target in the databases ns."""
+    sts_name = {
+        "yugabyte": "yugabytedb",
+        "aerospike": "aerospike",
+    }.get(target, target)
+    namespace = "databases"
+    result = {
+        "statefulset": sts_name,
+        "namespace": namespace,
+    }
+    try:
+        sts_result = kubectl.run_command(
+            ["kubectl", "get", "statefulset", sts_name, "-n", namespace, "-o", "json"]
+        )
+        if sts_result.get("success"):
+            try:
+                import json as _json
+                sts = _json.loads(sts_result.get("stdout", ""))
+                spec = sts.get("spec", {})
+                status = sts.get("status", {})
+                selector = (sts.get("spec", {}) or {}).get("selector", {}) or {}
+                result["statefulset_status"] = {
+                    "desired_replicas": spec.get("replicas", 0),
+                    "ready_replicas": status.get("readyReplicas", 0),
+                    "current_replicas": status.get("currentReplicas", 0),
+                    "available_replicas": status.get("availableReplicas", 0),
+                    "observed_generation": status.get("observedGeneration"),
+                    "update_revision": status.get("updateRevision"),
+                }
+                sel_labels = (selector or {}).get("matchLabels", {})
+                if sel_labels:
+                    result["pod_selector_labels"] = sel_labels
+            except Exception:
+                result["statefulset_error"] = "unable to parse statefulset json"
+        else:
+            result["statefulset_error"] = (
+                sts_result.get("stderr") or sts_result.get("error", "")
+            )
+
+        # Pods owned by this StatefulSet (scaled-to-zero means none).
+        pod_result = kubectl.run_command(
+            ["kubectl", "get", "pods", "-n", namespace, "-o", "json"]
+        )
+        managed = []
+        if pod_result.get("success"):
+            try:
+                import json as _json
+                all_pods = (_json.loads(pod_result.get("stdout", "")) or {}).get(
+                    "items", []
+                )
+                for pod in all_pods:
+                    owner_refs = (pod.get("metadata", {}) or {}).get(
+                        "ownerReferences", []
+                    )
+                    is_sts = any(
+                        (o or {}).get("kind") == "StatefulSet"
+                        and (o or {}).get("name") == sts_name
+                        for o in owner_refs
+                    )
+                    st = (pod.get("status", {}) or {}).get("phase", "")
+                    if is_sts:
+                        managed.append({
+                            "name": pod.get("metadata", {}).get("name"),
+                            "phase": st,
+                            "delete_timestamp": (
+                                pod.get("metadata", {}).get("deletionTimestamp")
+                            ),
+                        })
+            except Exception:
+                pass
+        result["statefulset_pods"] = managed
+
+        # Recent events for the StatefulSet/pod explain the scale-down or
+        # termination (e.g. SuccessfulDelete / Scaled down replica set X to 0).
+        events_result = kubectl.run_command(
+            [
+                "kubectl", "get", "events", "-n", namespace,
+                "--sort-by=.lastTimestamp", "-o", "json",
+            ]
+        )
+        relevant = []
+        if events_result.get("success"):
+            try:
+                import json as _json
+                items = (_json.loads(events_result.get("stdout", "")) or {}).get(
+                    "items", []
+                )
+                search = sts_name.lower()
+                for ev in items[-30:]:
+                    src = (ev.get("involvedObject", {}) or {})
+                    name = (src.get("name") or "").lower()
+                    kind = (src.get("kind") or "").lower()
+                    if search in name or kind in ("statefulset", "event"):
+                        relevant.append({
+                            "reason": ev.get("reason"),
+                            "type": ev.get("type"),
+                            "message": ev.get("message"),
+                            "object": f"{src.get('kind')}/{src.get('name')}",
+                            "last_timestamp": ev.get("lastTimestamp"),
+                            "count": ev.get("count"),
+                        })
+            except Exception:
+                pass
+        result["events"] = relevant[-15:]
+    except Exception as exc:
+        result["error"] = str(exc)[:300]
+    return result
 
 
 def collect_workflow_evidence(run_id: int):
